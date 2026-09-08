@@ -19,14 +19,19 @@ from fastapi import APIRouter, Depends
 
 import host_snapshot
 from _deps import verify_auth_token
+
+# Same trap as system_monitor above: the module holds the class, the singleton lives in
+# agent_status_service. Importing the module made `agent_status_watcher.snapshot()` raise
+# AttributeError and the whole /api/fleet board 500.
+from agent_status_service import agent_status_watcher
+from pane_targets import build_targets
+from sqlite_storage import storage
+
 # Both modules export a **singleton**, not module-level functions. Importing the module
 # and calling `system_monitor.get_stats` silently produced an AttributeError that this
 # route swallowed into "stats unavailable" — the board drew every local figure blank.
 from system_monitor import system_monitor
 from tmux_manager import tmux_manager
-from pane_targets import build_targets
-import agent_status_watcher
-from sqlite_storage import storage
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
