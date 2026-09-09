@@ -149,3 +149,45 @@ describe('LocalFolderPicker 숨김 폴더', () => {
     expect(screen.queryByText('emptyFolder')).toBeNull();
   });
 });
+
+describe('LocalFolderPicker 닫혔다 열기 — 훅 순서 회귀', () => {
+  /* 앱에서 이 픽커는 App 에서 **항상 마운트된 채** 닫힌 상태로 살다가 열린다.
+     useState/useCallback 이 조기 return(if (!isOpen) return null) 뒤에 있으면
+     닫힌 렌더와 열린 렌더의 훅 개수가 어긋나 React 가 "#310 Rendered more hooks
+     than during the previous render" 를 던져 픽커가 아예 뜨지 않았다(2026-09-09 버그).
+     이 describe 의 테스트는 전부 그 시퀀스(닫힘 마운트 → rerender 로 열림)를 밟는다. */
+  const listing = () => Promise.resolve({
+    ok: true,
+    json: () => Promise.resolve({
+      items: [{ name: 'Documents', path: 'Documents', type: 'directory' }],
+    }),
+  });
+
+  let originalFetch;
+  beforeEach(() => {
+    originalFetch = global.fetch;
+    global.fetch = vi.fn(listing);
+  });
+  afterEach(() => { global.fetch = originalFetch; });
+
+  it('닫힌 채 마운트된 뒤 열려도 목록을 띄운다', async () => {
+    const { rerender } = render(
+      <LocalFolderPicker isOpen={false} onPick={vi.fn()} onClose={vi.fn()} t={mockT} />
+    );
+    rerender(
+      <LocalFolderPicker isOpen onPick={vi.fn()} onClose={vi.fn()} t={mockT} />
+    );
+    await waitFor(() => expect(screen.getByText('Documents')).toBeInTheDocument());
+    expect(global.fetch).toHaveBeenCalled();
+  });
+
+  it('열렸다 닫았다 다시 열어도 산다', async () => {
+    const props = { onPick: vi.fn(), onClose: vi.fn(), t: mockT };
+    const { rerender } = render(<LocalFolderPicker isOpen={false} {...props} />);
+    rerender(<LocalFolderPicker isOpen {...props} />);
+    await waitFor(() => expect(screen.getByText('Documents')).toBeInTheDocument());
+    rerender(<LocalFolderPicker isOpen={false} {...props} />);
+    rerender(<LocalFolderPicker isOpen {...props} />);
+    await waitFor(() => expect(screen.getByText('Documents')).toBeInTheDocument());
+  });
+});
