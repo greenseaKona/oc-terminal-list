@@ -110,15 +110,11 @@ const LocalFolderPicker = ({
     return () => document.removeEventListener('keydown', handle);
   }, [isOpen, onClose]);
 
-  if (!isOpen) return null;
-
-  const { shown, hiddenCount } = splitHiddenEntries(items, showHidden);
-  const goUp = () => load(parentOf(path));
-  const goHome = () => load('');
-  const enter = (folder) => load(folder.path);
-
   /* 지금 보고 있는 폴더 **안에** 만들고 곧장 들어간다. 경로 합치기는 여기서만 한다 —
-     이름 검사는 NewFolderRow 가 이미 했다(`/` 금지). */
+     이름 검사는 NewFolderRow 가 이미 했다(`/` 금지).
+     ⚠️ 다른 모든 훅과 마찬가지로 조기 return 보다 **위**에 있어야 한다. 아래에 두면
+     닫힌 렌더(8 hooks)와 열린 렌더(9 hooks)의 훅 개수가 어긋나서 React #310 으로
+     픽커가 아예 뜨지 않는다. */
   const createFolder = useCallback(async (name) => {
     const target = path ? `${path}/${name}` : name;
     const res = await apiFetch('/api/files/create', {
@@ -132,6 +128,14 @@ const LocalFolderPicker = ({
     }
     await load(target);
   }, [path, load]);
+
+  if (!isOpen) return null;
+
+  const { shown, hiddenCount } = splitHiddenEntries(items, showHidden);
+  const goUp = () => load(parentOf(path));
+  const goHome = () => load('');
+  const enter = (folder) => load(folder.path);
+
   const confirm = () => onPick?.(path, launch);
 
   const overlayStyle = inline ? styles.inlineOverlay : styles.overlay;
