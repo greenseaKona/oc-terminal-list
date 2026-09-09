@@ -302,17 +302,19 @@ const S = {
      and only became an object under the cursor — you could not tell where one row ended
      and the next began until you hovered it. The face is faint enough that a dozen of
      them still scan as a list rather than a wall of cards; hover lifts it a step further
-     so pointing at one is still visible. */
+     so pointing at one is still visible.
+
+     ⚠️ 이 면은 대시보드 유리 정의(dashboardCardStyle)를 공유한다. fill 만 남긴 채
+     blur 를 빼면 "서리 유리" 가 아니라 그냥 반투명 판이다 — 캔버스 무늬가 글자
+     밑으로 그대로 비쳐 목록을 읽을 수 없었다(실측). 유리는 fill 과 blur 가 한 몸. */
   row: {
+    ...dashboardCardStyle({ padding: '6px 10px' }),
     display: 'flex', alignItems: 'center', gap: '10px',
-    width: '100%', minHeight: '46px', padding: '6px 10px',
-    background: `color-mix(in srgb, ${color.surface0} var(--glass-fill, 55%)%, transparent)`,
-    border: `1px solid ${color.border}`,
-    borderRadius: radius.md,
+    width: '100%', minHeight: '46px',
     color: color.text, textAlign: 'left', cursor: 'pointer', font: 'inherit',
     transition: 'background 120ms, border-color 120ms',
   },
-  rowHover: color.surface1,
+  rowHover: `color-mix(in srgb, ${color.surface1} var(--glass-fill, 62%), transparent)`,
   stateTile: {
     width: '24px', height: '24px', flexShrink: 0,
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',

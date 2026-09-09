@@ -122,4 +122,16 @@ describe('FleetBoard', () => {
     render(<FleetBoard targets={[]} t={t} />);
     expect(screen.getByText(ko.fleetEmpty)).toBeTruthy();
   });
+
+  it('행은 대시보드 유리 정의를 공유한다 — fill 없는 반투명은 배경이 글자 밑으로 비친다', () => {
+    // 실측 회귀: color-mix 안에 % 가 이중으로 붙어 선언 자체가 무효화되고, 행에
+    // 배경이 아예 안 칠해졌다. 유리는 fill 과 blur 가 한 몸 — dashboardCardStyle
+    // 를 공유하는 것으로만 보증한다 (기계 카드와 같은 정의).
+    render(<FleetBoard targets={[target({ title: 'building' })]} t={t} />);
+    const row = screen.getByText('building').closest('button');
+    const style = row.getAttribute('style');
+    expect(style).toContain('var(--glass-fill,');   // 이북 모드의 불투명 스위치가 닿는다
+    expect(style).toContain('backdrop-filter');     // 서리 유리 — 뒤가 뭉개져야 읽힌다
+    expect(style).not.toContain('%%');              // 이중 % 는 color-mix 전체를 무효화한다
+  });
 });
