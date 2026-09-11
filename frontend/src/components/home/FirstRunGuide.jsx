@@ -42,7 +42,7 @@ const S = {
     borderRadius: radius.md,
   },
   title: {
-    fontSize: fontSize['11'], fontWeight: fontWeight.medium, color: color.muted,
+    fontSize: fontSize['11'], fontWeight: fontWeight.medium, color: color.subtext,
     letterSpacing: '0.04em', textTransform: 'uppercase',
   },
   list: { display: 'flex', flexDirection: 'column', gap: '6px', margin: 0, padding: 0, listStyle: 'none' },
