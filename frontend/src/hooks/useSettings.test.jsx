@@ -9,8 +9,8 @@ const TestSettings = () => {
 };
 
 describe('useSettings', () => {
-  it('defaults the mobile font size to 10 (the desktop size reads oversized on a phone)', () => {
-    expect(DEFAULT_FONT_SIZE_MOBILE).toBe(10);
+  it('defaults the mobile font size to a readable 11px', () => {
+    expect(DEFAULT_FONT_SIZE_MOBILE).toBe(11);
     expect(DEFAULT_SETTINGS.fontSizeMobile).toBe(DEFAULT_FONT_SIZE_MOBILE);
   });
 

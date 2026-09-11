@@ -25,4 +25,4 @@ export const normalizeTerminalFontFamily = (fontFamily) => {
 // Keep the fallbacks pointing here — a literal copied into a call site silently
 // keeps the old default when this one changes.
 export const DEFAULT_FONT_SIZE = 12;
-export const DEFAULT_FONT_SIZE_MOBILE = 10;
+export const DEFAULT_FONT_SIZE_MOBILE = 11;
