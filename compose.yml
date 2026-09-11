@@ -16,7 +16,7 @@ services:
     container_name: oc-terminal-list
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-38822}:${APP_PORT:-38822}"
+      - "127.0.0.1:${APP_PORT:-38822}:${APP_PORT:-38822}"
     environment:
       HOST: 0.0.0.0
       APP_PORT: ${APP_PORT:-38822}
