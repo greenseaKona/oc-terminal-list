@@ -41,6 +41,19 @@ describe('MobileToolbar quick input', () => {
     fireEvent.click(screen.getByTitle('Quick Input'));
     expect(onOpen).toHaveBeenCalled();
   });
+
+  it('작은 화면에서도 32px 터치 영역과 우측 overflow 힌트를 제공한다', () => {
+    const { container } = render(
+      <MobileToolbar
+        language="en"
+        keys={[{ id: 'esc', kind: 'send', label: 'ESC', payload: '\x1b' }]}
+      />
+    );
+
+    const key = screen.getByText('ESC').closest('button');
+    expect(key.style.height).toBe('32px');
+    expect(container.querySelector('style').textContent).toContain('mask-image: linear-gradient');
+  });
 });
 
 describe('MobileToolbar 길게 누르기 반복', () => {

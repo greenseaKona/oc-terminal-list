@@ -104,7 +104,6 @@ const S = {
     justifyContent: 'center',
     background: 'transparent',
     border: 'none',
-    outline: 'none',
     padding: 0,
     flexShrink: 0,
     transition: `color ${motion.fast}`,

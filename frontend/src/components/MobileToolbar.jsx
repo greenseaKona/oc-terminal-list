@@ -245,6 +245,8 @@ const MobileToolbar = ({
         .mobile-toolbar-scroll {
           scrollbar-width: none;        /* 사용자 요청 — 단축키 영역 스크롤바 숨김 */
           -ms-overflow-style: none;
+          mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 20px), transparent 100%);
+          -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 20px), transparent 100%);
         }
         .mobile-toolbar-scroll::-webkit-scrollbar { display: none; width: 0; height: 0; }
         @keyframes skel-pulse {
@@ -417,7 +419,6 @@ const styles = {
     fontFamily: 'inherit',
     cursor: 'pointer',
     transition: `background ${motion.fast}, border-color ${motion.fast}, color ${motion.fast}`,
-    outline: 'none',
     WebkitTapHighlightColor: 'transparent',
     whiteSpace: 'nowrap',
   },
