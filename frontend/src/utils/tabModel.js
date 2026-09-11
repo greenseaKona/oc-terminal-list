@@ -25,7 +25,14 @@ export const makePane = (extra = {}) => ({
 export const makLocalTab = (sessionId, name, cwd = null, { icon = null, colorIndex = null, themeOverride = null, launch = null } = {}) => {
   // `launch` = 경로 픽커에서 고른 "무엇으로 열까"(utils/launchOptions). 안 고르면 빈
   // 객체라 pane 에 키가 아예 안 생기고, 그러면 서버가 설정을 읽는다.
-  const pane = makePane({ sessionId, ...(themeOverride ? { themeOverride } : null), ...(launch || null) });
+  /* cwd is both the tab fallback and pane creation data. A merge/extract moves the pane
+     object, so keeping cwd only on the tab loses the selected path at that boundary. */
+  const pane = makePane({
+    sessionId,
+    ...(cwd != null ? { cwd } : null),
+    ...(themeOverride ? { themeOverride } : null),
+    ...(launch || null),
+  });
   return {
     id: `local:${sessionId}`,
     type: 'local',
@@ -88,6 +95,7 @@ export const makeHostTab = (host, cwd = null, tmuxSessionName = null, { themeOve
   const pane = makePane({
     hostId: host.id,
     tmuxSessionName: paneTmuxSessionName,
+    ...(cwd != null ? { cwd } : null),
     ...(selectedTheme ? { themeOverride: selectedTheme } : null),
     ...(launch || null),
   });
@@ -200,13 +208,28 @@ export const deriveTabSecondaryIdentities = (tab, hosts = [], settings = {}) => 
 // 옛 탭 (panes 없음) 자동 마이그레이션 — localStorage 호환
 export const migrateTab = (t) => {
   if (t.panes && t.panes.length > 0) {
+    /* Materialize legacy tab-only cwd on panes that belong to the tab identity. Mixed panes
+       must not inherit another machine's path merely because they share a visual tab. */
+    const panes = t.cwd == null ? t.panes : t.panes.map((pane) => {
+      if (pane.cwd != null) return pane;
+      const ownsTabIdentity = t.type === 'local'
+        ? !pane.hostId
+        : !!pane.hostId && pane.hostId === t.hostId;
+      return ownsTabIdentity ? { ...pane, cwd: t.cwd } : pane;
+    });
     // Ensure splitTree exists
     if (!t.splitTree) {
-      return { ...t, splitTree: treeFromLegacyLayout(t.panes, t.layout) };
+      return { ...t, panes, splitTree: treeFromLegacyLayout(panes, t.layout) };
     }
-    return t;
+    return panes === t.panes || panes.every((pane, index) => pane === t.panes[index])
+      ? t
+      : { ...t, panes };
   }
-  const pane = makePane({ sessionId: t.sessionId, hostId: t.hostId });
+  const pane = makePane({
+    sessionId: t.sessionId,
+    hostId: t.hostId,
+    ...(t.cwd != null ? { cwd: t.cwd } : null),
+  });
   return { ...t, panes: [pane], layout: 'single', splitTree: makeLeaf(pane.id), activePaneId: pane.id };
 };
 

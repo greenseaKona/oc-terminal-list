@@ -1,11 +1,35 @@
 import { describe, it, expect } from 'vitest';
-import { deriveTabPrimaryIdentity, deriveTabSecondaryIdentities, migrateTab, paneIdentityKey } from './tabModel';
+import {
+  deriveTabPrimaryIdentity,
+  deriveTabSecondaryIdentities,
+  makLocalTab,
+  makeHostTab,
+  migrateTab,
+  paneIdentityKey,
+} from './tabModel';
 
 const HOSTS = [
   { id: 'h-argon', name: 'ArgonEON', icon: null, color_index: 36 },
   { id: 'h-pve', name: 'Proxmox VE', icon: 'Atom', color_index: 44 },
   { id: 'h-nas', name: 'TrueNAS Scale', icon: 'PieChart', color_index: 13 },
 ];
+
+describe('tab factories — pane cwd ownership', () => {
+  it('stores a selected local path on both the tab and its pane', () => {
+    const created = makLocalTab('s1', 'project', 'project/sub');
+    expect(created.cwd).toBe('project/sub');
+    expect(created.panes[0].cwd).toBe('project/sub');
+  });
+
+  it('preserves the empty local workspace-root path', () => {
+    expect(makLocalTab('s1', 'terminal', '').panes[0].cwd).toBe('');
+  });
+
+  it('stores a selected remote absolute path on the host pane', () => {
+    const created = makeHostTab({ id: 'h1', name: 'box' }, '/srv/project');
+    expect(created.panes[0].cwd).toBe('/srv/project');
+  });
+});
 
 describe('paneIdentityKey', () => {
   it('groups host panes by hostId and local panes as one identity', () => {
@@ -115,6 +139,18 @@ describe('deriveTabPrimaryIdentity', () => {
 });
 
 describe('migrateTab — VNC pane restoration', () => {
+  it('materializes a legacy tab-only cwd only on panes from the same machine', () => {
+    const migrated = migrateTab({
+      id: 'local:s1',
+      type: 'local',
+      cwd: 'project',
+      panes: [{ id: 'local-pane', sessionId: 's1' }, { id: 'remote-pane', hostId: 'h1' }],
+      splitTree: { type: 'leaf', id: 'local-pane' },
+    });
+    expect(migrated.panes[0].cwd).toBe('project');
+    expect(migrated.panes[1].cwd).toBeUndefined();
+  });
+
   it('preserves mode/hostId/display through the restore path', () => {
     // 서버 tab-state 에서 받은 VNC pane 이 migrateTab 을 거쳐도 필드가 살아있어야
     // 새로고침 후 VncPane 이 다시 렌더된다 (Phase 7 회귀 방지).
