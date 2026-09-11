@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   splitPaneOp, dropTabToSplitPaneOp, activatePaneOp, reorderPaneOp, dropPaneToSplitOp,
-  removePaneOp, planPaneClose, extractPaneToTabOp,
+  removePaneOp, planPaneClose, collectTabCloseTargets, extractPaneToTabOp,
 } from './tabOperations';
 
 // 이 로직은 App.jsx 안에 있는 동안 테스트가 하나도 없었다. 순수 함수로 나온 김에
@@ -114,6 +114,27 @@ describe('dropTabToSplitPaneOp', () => {
       hosts: [], computePaneTmuxSession: noSession,
     })).toBe(tabs);
   });
+
+  it('탭에만 있던 로컬 cwd 를 이동하는 pane 에 보존한다', () => {
+    const src = tab('src', [filled('sp', 'S')], { cwd: 'picked/project' });
+    const dst = tab('dst', [pane('dp')], { cwd: 'other' });
+    const out = dropTabToSplitPaneOp([src, dst], {
+      sourceTabId: 'src', targetTabId: 'dst', targetPaneId: 'dp', dir: 'center',
+      hosts: [], computePaneTmuxSession: noSession,
+    });
+    expect(out[0].panes[0].cwd).toBe('picked/project');
+  });
+
+  it('center 교환에서 양쪽 탭의 cwd 를 각 pane 에 보존한다', () => {
+    const src = tab('src', [filled('sp', 'S')], { cwd: 'source/path' });
+    const dst = tab('dst', [filled('dp', 'D')], { cwd: 'dest/path' });
+    const out = dropTabToSplitPaneOp([src, dst], {
+      sourceTabId: 'src', targetTabId: 'dst', targetPaneId: 'dp', dir: 'center',
+      hosts: [], computePaneTmuxSession: noSession,
+    });
+    expect(out.find((t) => t.id === 'dst').panes[0].cwd).toBe('source/path');
+    expect(out.find((t) => t.id === 'src').panes[0].cwd).toBe('dest/path');
+  });
 });
 
 describe('activatePaneOp', () => {
@@ -152,6 +173,16 @@ describe('activatePaneOp', () => {
       tabId: 'dst', paneId: 'dp', target: { type: 'tab', sourceTabId: 'gone' },
       hosts: [], settings: {}, computePaneTmuxSession: () => null,
     })).toBe(tabs);
+  });
+
+  it('탭에만 있던 cwd 를 흡수되는 pane 에 보존한다', () => {
+    const src = tab('src', [filled('sp', 'S')], { cwd: 'picked/project' });
+    const dst = tab('dst', [pane('dp')], { cwd: 'other' });
+    const out = activatePaneOp([src, dst], {
+      tabId: 'dst', paneId: 'dp', target: { type: 'tab', sourceTabId: 'src' },
+      hosts: [], settings: {}, computePaneTmuxSession: () => null,
+    });
+    expect(out[0].panes[0].cwd).toBe('picked/project');
   });
 });
 
@@ -239,9 +270,43 @@ describe('planPaneClose', () => {
     expect(planPaneClose(tab('t1', panes2), 'a', hosts).willPersist).toBe(true);
   });
 
+  it('pane 의 multiplexer override 를 우선한다', () => {
+    const panes = [pane('a', { hostId: 'h1', multiplexer: 'none' }), filled('b', 's2')];
+    expect(planPaneClose(tab('t1', panes), 'a', hosts, 'tmux').willPersist).toBe(false);
+  });
+
   it('없는 pane 이면 아무것도 안 한다', () => {
     expect(planPaneClose(tab('t1', [filled('a', 's1')]), 'nope', hosts).action).toBe('none');
     expect(planPaneClose(null, 'a', hosts).action).toBe('none');
+  });
+});
+
+describe('collectTabCloseTargets', () => {
+  it('혼합 탭의 로컬 세션과 원격 tmux 를 모두 수집한다', () => {
+    const mixed = tab('mixed', [
+      pane('local', { sessionId: 'local-session' }),
+      pane('remote', { hostId: 'h1', tmuxSessionName: 'remote-session' }),
+    ]);
+    const targets = collectTabCloseTargets(mixed, {
+      hosts: [{ id: 'h1', use_remote_tmux: 1 }],
+      defaultMultiplexer: 'tmux',
+      computePaneTmuxSession: (_host, _tab, targetPane) => targetPane.tmuxSessionName,
+    });
+    expect(targets.localSessionIds).toEqual(['local-session']);
+    expect(targets.remoteSessions).toEqual([{ hostId: 'h1', session: 'remote-session' }]);
+  });
+
+  it('tmux 를 끈 원격 pane 과 VNC pane 은 tmux 종료 대상이 아니다', () => {
+    const mixed = tab('mixed', [
+      pane('plain', { hostId: 'h1', multiplexer: 'none' }),
+      pane('vnc', { hostId: 'h1', mode: 'vnc', display: 1 }),
+    ]);
+    const targets = collectTabCloseTargets(mixed, {
+      hosts: [{ id: 'h1', use_remote_tmux: 1 }],
+      defaultMultiplexer: 'tmux',
+      computePaneTmuxSession: () => 'must-not-kill',
+    });
+    expect(targets.remoteSessions).toEqual([]);
   });
 });
 
@@ -281,6 +346,17 @@ describe('extractPaneToTabOp', () => {
 
   it('없는 탭/pane 이면 null', () => {
     expect(extractPaneToTabOp([], { tabId: 'x', paneId: 'y', hosts: [], now: 1 })).toBe(null);
+  });
+
+  it('pane 자신의 cwd 를 새 탭 cwd 로 승계한다', () => {
+    const panes = [pane('a', { sessionId: 's1', cwd: 'picked/project' }), filled('b', 's2')];
+    const result = extractPaneToTabOp(
+      [tab('t1', panes, { cwd: 'other' })],
+      { tabId: 't1', paneId: 'a', hosts: [], now: 1 },
+    );
+    const created = result.tabs.find((item) => item.id === result.newTabId);
+    expect(created.cwd).toBe('picked/project');
+    expect(created.panes[0].cwd).toBe('picked/project');
   });
 });
 

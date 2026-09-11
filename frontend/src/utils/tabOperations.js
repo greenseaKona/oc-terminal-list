@@ -17,6 +17,24 @@ import {
 import {
   makePane, makeFreshHostTmuxSessionName, usedThemeIdsFromTabs, resolveProfileTheme,
 } from './tabModel';
+import {
+  persists as multiplexerPersists,
+  fromHost as multiplexerFromHost,
+  normalize as normalizeMultiplexer,
+} from './multiplexer';
+
+/* Legacy tabs stored their starting cwd only on the tab. Materialize it before a pane crosses
+   a tab boundary, but only when the pane belongs to that tab's machine identity. */
+const ownPaneCwd = (pane, tab) => (
+  pane?.cwd != null || tab?.cwd == null
+    ? pane
+    : (
+      (tab.type === 'local' && !pane.hostId)
+      || (tab.type === 'host' && pane.hostId === tab.hostId)
+        ? { ...pane, cwd: tab.cwd }
+        : pane
+    )
+);
 /** 탭 안에서 pane 을 쪼갠다. dir='2x2' 는 빈 picker pane 을 4개까지 채운다. */
 export const splitPaneOp = (tabs, { dir = 'h', targetTabId, targetPaneId, activeTabId }) => {
   const prev = tabs;
@@ -71,14 +89,16 @@ export const dropTabToSplitPaneOp = (tabs, { sourceTabId, targetTabId, targetPan
   const destTab = prev.find((t) => t.id === targetTabId);
   if (!srcTab || !destTab) return prev;
 
-  const srcActivePanes = (srcTab.panes || []).filter((p) => p.sessionId || p.hostId);
+  const srcActivePanes = (srcTab.panes || [])
+    .filter((p) => p.sessionId || p.hostId)
+    .map((p) => ownPaneCwd(p, srcTab));
   if (srcActivePanes.length === 0) return prev.filter((t) => t.id !== sourceTabId);
 
   // Preserve the effective tmux session name so the moved pane reconnects to the correct session
   // regardless of its new paneIndex in the destination tab.
   const getEffectiveSession = (sp) => {
     if (!sp.hostId) return sp.tmuxSessionName;
-    const paneIdx = (srcTab.panes || []).indexOf(sp);
+    const paneIdx = (srcTab.panes || []).findIndex((p) => p.id === sp.id);
     const host = currentHosts.find((h) => h.id === sp.hostId);
     return computePaneTmuxSession(host, srcTab, sp, paneIdx);
   };
@@ -87,7 +107,7 @@ export const dropTabToSplitPaneOp = (tabs, { sourceTabId, targetTabId, targetPan
   if (dir === 'center') {
     const currentPanes = [...(destTab.panes || [])];
     const targetIdx = currentPanes.findIndex((p) => p.id === targetPaneId);
-    const targetOccupant = targetIdx >= 0 ? currentPanes[targetIdx] : null;
+    const targetOccupant = targetIdx >= 0 ? ownPaneCwd(currentPanes[targetIdx], destTab) : null;
     const isOccupied = !!(targetOccupant?.sessionId || targetOccupant?.hostId);
 
     if (isOccupied) {
@@ -217,7 +237,9 @@ export const activatePaneOp = (tabs, { tabId, paneId, target = null, hosts, sett
   if (target?.type === 'tab' && target.sourceTabId) {
     const src = prev.find((tt) => tt.id === target.sourceTabId);
     if (!src) return prev;
-    const srcActivePanes = (src.panes || []).filter((p) => p.sessionId || p.hostId);
+    const srcActivePanes = (src.panes || [])
+      .filter((p) => p.sessionId || p.hostId)
+      .map((p) => ownPaneCwd(p, src));
     if (srcActivePanes.length === 0) {
       return prev.filter((t) => t.id !== target.sourceTabId);
     }
@@ -225,7 +247,7 @@ export const activatePaneOp = (tabs, { tabId, paneId, target = null, hosts, sett
     // Preserve effective tmux session name so moved pane reconnects to the correct session
     const getEffectiveSession = (sp) => {
       if (!sp.hostId) return sp.tmuxSessionName;
-      const paneIdx = (src.panes || []).indexOf(sp);
+      const paneIdx = (src.panes || []).findIndex((p) => p.id === sp.id);
       const host = hosts.find((h) => h.id === sp.hostId);
       return computePaneTmuxSession(host, src, sp, paneIdx);
     };
@@ -408,18 +430,54 @@ export const removePaneOp = (tabs, { tabId, paneId }) => tabs.map((t) => {
  * 'immediate'     멀티 중 빈 pane — 물어볼 것 없이 제거.
  * 'confirm'       세션이 살아있는 pane — 확인을 받아야 한다(닫기 = 세션 종료 모델).
  */
-export const planPaneClose = (tab, paneId, hosts = []) => {
+export const planPaneClose = (tab, paneId, hosts = [], defaultMultiplexer = undefined) => {
   const panes = tab?.panes || [];
   const pane = panes.find((p) => p.id === paneId);
   if (!tab || !pane) return { action: 'none' };
   if (panes.length <= 1) return { action: 'delegateToTab' };
   if (!pane.sessionId && !pane.hostId) return { action: 'immediate' };
   const host = pane.hostId ? hosts.find((h) => h.id === pane.hostId) : null;
+  const multiplexer = pane.multiplexer
+    ? normalizeMultiplexer(pane.multiplexer)
+    : multiplexerFromHost(host, defaultMultiplexer);
   return {
     action: 'confirm',
     paneIndex: panes.findIndex((p) => p.id === paneId),
-    // 로컬은 항상 tmux 위에서 돈다. 원격은 호스트 설정에 달렸다.
-    willPersist: !pane.hostId || !!host?.use_remote_tmux,
+    // Local sessions use tmux. Remote persistence follows the effective pane setting.
+    willPersist: !pane.hostId || multiplexerPersists(multiplexer),
+  };
+};
+
+/** Resolve every terminal session owned by a tab, including tabs with mixed local/remote panes. */
+export const collectTabCloseTargets = (
+  tab,
+  { hosts = [], defaultMultiplexer = undefined, computePaneTmuxSession } = {},
+) => {
+  if (!tab) return { localSessionIds: [], remoteSessions: [] };
+  const panes = tab.panes?.length
+    ? tab.panes
+    : [{ sessionId: tab.sessionId, hostId: tab.hostId }];
+  const localSessionIds = new Set();
+  const remoteSessions = new Map();
+
+  panes.forEach((pane, paneIndex) => {
+    if (pane.sessionId && !pane.hostId) {
+      localSessionIds.add(pane.sessionId);
+      return;
+    }
+    if (!pane.hostId || pane.mode === 'vnc') return;
+    const host = hosts.find((candidate) => candidate.id === pane.hostId);
+    const multiplexer = pane.multiplexer
+      ? normalizeMultiplexer(pane.multiplexer)
+      : multiplexerFromHost(host, defaultMultiplexer);
+    if (!host || !multiplexerPersists(multiplexer)) return;
+    const session = computePaneTmuxSession?.(host, tab, pane, paneIndex);
+    if (session) remoteSessions.set(`${pane.hostId}\0${session}`, { hostId: pane.hostId, session });
+  });
+
+  return {
+    localSessionIds: [...localSessionIds],
+    remoteSessions: [...remoteSessions.values()],
   };
 };
 
@@ -436,7 +494,7 @@ export const extractPaneToTabOp = (tabs, { tabId, paneId, hosts = [], now = 0 })
 
   // 원본 pane 을 통째로 복사 — mode/display/cwd 등 모든 필드가 누락 없이 따라온다.
   // id 만 새로 발급 (새 탭의 새 pane 이므로).
-  const newPane = { ...pane, id: generateUUID() };
+  const newPane = { ...ownPaneCwd(pane, src), id: generateUUID() };
   const newTabId = pane.hostId
     ? `host:${pane.hostId}:${now}:${newPane.id.slice(0, 6)}`
     : `local:${pane.sessionId}:${now}:${newPane.id.slice(0, 6)}`;
@@ -456,7 +514,7 @@ export const extractPaneToTabOp = (tabs, { tabId, paneId, hosts = [], now = 0 })
     id: newTabId,
     type: pane.hostId ? 'host' : 'local',
     name: paneHost?.name || (pane.hostId ? src.name : (src.type === 'local' ? src.name : 'Local')),
-    cwd: src.cwd ?? null,
+    cwd: newPane.cwd ?? src.cwd ?? null,
     icon: paneHost?.icon ?? (pane.hostId ? null : (src.icon || null)),
     color_index: paneHost?.color_index ?? (pane.hostId ? 0 : (src.color_index ?? 0)),
     panes: [newPane],
