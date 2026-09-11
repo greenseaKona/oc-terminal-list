@@ -272,17 +272,20 @@ describe('Terminal', () => {
       expect(window.terminalSessions?.['reg-1']).toBeUndefined();
     });
 
-    it('sendCommand 는 개행을 붙여 보낸다', async () => {
+    it('sendCommand 는 본문과 Enter를 별도 PTY 입력으로 보낸다', async () => {
       renderTerminal({ sessionId: 'reg-2' });
       const ws = await openSocket();
       await waitFor(() => expect(window.terminalSessions?.['reg-2']).toBeTruthy());
 
       await act(async () => {
         window.terminalSessions['reg-2'].sendCommand('echo hi');
-        await new Promise((r) => setTimeout(r, 20));
+        await new Promise((r) => setTimeout(r, 60));
       });
 
-      await waitFor(() => expect(ws.sent).toContain('echo hi\r'));
+      await waitFor(() => {
+        expect(ws.sent).toContain('echo hi');
+        expect(ws.sent).toContain('\r');
+      });
     });
   });
 

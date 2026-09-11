@@ -106,16 +106,16 @@ describe('useTerminalApi', () => {
       expect(api().sendData('ls')).toBe(false);
     });
 
-    // 개행이 없으면 셸이 명령을 실행하지 않는다 — 커서만 깜빡이고 "안 먹네" 가 된다.
-    it('sendCommand 는 개행을 보장한다', () => {
+    // 본문과 Enter 가 같은 burst 면 Codex 가 붙여넣기로 보고 제출하지 않을 수 있다.
+    it('sendCommand 는 개행을 보장하고 실제 Enter 경계를 요청한다', () => {
       const { enqueue } = setup();
 
       api().sendCommand('echo hi');
-      expect(enqueue).toHaveBeenCalledWith('echo hi\r', expect.anything());
+      expect(enqueue).toHaveBeenCalledWith('echo hi\r', expect.objectContaining({ separateTrailingEnterMs: 40 }));
 
       enqueue.mockClear();
       api().sendCommand('echo hi\n'); // 이미 개행이면 덧붙이지 않는다
-      expect(enqueue).toHaveBeenCalledWith('echo hi\n', expect.anything());
+      expect(enqueue).toHaveBeenCalledWith('echo hi\r', expect.objectContaining({ separateTrailingEnterMs: 40 }));
     });
 
     /* 명령은 큐 앞에 꽂고(priority), 밀린 휠 리포트는 걷어낸다(dropQueuedWheel).
@@ -125,7 +125,12 @@ describe('useTerminalApi', () => {
 
       api().sendCommand('ls');
 
-      expect(enqueue).toHaveBeenCalledWith('ls\r', { delay: 0, priority: true, dropQueuedWheel: true });
+      expect(enqueue).toHaveBeenCalledWith('ls\r', {
+        delay: 0,
+        priority: true,
+        dropQueuedWheel: true,
+        separateTrailingEnterMs: 40,
+      });
       expect(scrollToBottom).toHaveBeenCalled(); // 보낸 결과가 보이게 맨 아래로
     });
 

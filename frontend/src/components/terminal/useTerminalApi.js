@@ -38,12 +38,22 @@ const useTerminalApi = ({ refs, forwardedRef, sessionId, paneId, tabId, isReady 
     if (typeof command !== 'string' || !command.trim()) return false;
     try { pushCommandHistory(sessionId, command); } catch { /* noop */ }
     try { forceScrollToBottomRef.current?.(); } catch { /* noop */ }
-    const payload = command.endsWith('\r') || command.endsWith('\n') ? command : `${command}\r`;
-    if (enqueueInputRef.current?.(payload, { delay: 0, priority: true, dropQueuedWheel: true })) {
+    // Normalize only the final line break. Internal newlines are intentional multi-line input.
+    const payload = `${command.replace(/(?:\r\n|\r|\n)$/, '')}\r`;
+    if (enqueueInputRef.current?.(payload, {
+      delay: 0,
+      priority: true,
+      dropQueuedWheel: true,
+      separateTrailingEnterMs: 40,
+    })) {
       return true;
     }
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(payload);
+      const socket = wsRef.current;
+      socket.send(payload.slice(0, -1));
+      setTimeout(() => {
+        if (wsRef.current === socket && socket.readyState === WebSocket.OPEN) socket.send('\r');
+      }, 40);
       return true;
     }
     return false;
