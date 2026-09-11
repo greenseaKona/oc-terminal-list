@@ -12,7 +12,7 @@ import LocalFolderPicker from '../LocalFolderPicker';
 import RemoteFolderPicker from '../RemoteFolderPicker';
 import BroadcastBadge from './BroadcastBadge';
 import useActiveTerminalCwd from '../../hooks/useActiveTerminalCwd';
-import { killPaneSession, restartCwdFor } from '../../utils/restartSession';
+import { killPaneSession } from '../../utils/restartSession';
 import EmptyPane from './EmptyPane';
 import { collectOtherPaneSessions } from '../../utils/paneSessions';
 import PaneAddressLabel from './PaneAddressLabel';
@@ -21,6 +21,9 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { buildItlHandle, itlHandleLabel } from '../../utils/itlHandle';
 import { EINK_THEME_ID } from '../../utils/einkMode';
 import useEvent from '../../hooks/useEvent';
+import {
+  TMUX, fromHost as multiplexerFromHost, normalize as normalizeMultiplexer,
+} from '../../utils/multiplexer';
 
 const Terminal = lazy(() => import('../Terminal'));
 const VncPane = lazy(() => import('../vnc/VncPane'));
@@ -306,8 +309,13 @@ const Pane = ({
 
   // 리모트 호스트 메타 — 훅보다 먼저 계산 (훅 파라미터로 필요)
   const remoteHost = !isLocal && pane.hostId ? (hosts.find((h) => h.id === pane.hostId) || null) : null;
-  // 원격 tmux 세션명 — use_remote_tmux 일 때만 유효
-  const remoteTmuxSession = !isLocal && remoteHost?.use_remote_tmux
+  // A per-pane launch choice wins; the host row only preserves legacy defaults.
+  const remoteMultiplexer = !isLocal && remoteHost
+    ? (pane.multiplexer
+        ? normalizeMultiplexer(pane.multiplexer)
+        : multiplexerFromHost(remoteHost, settings.defaultMultiplexer))
+    : null;
+  const remoteTmuxSession = remoteMultiplexer === TMUX
     ? (pane.tmuxSessionName || (() => {
         const base = (remoteHost.remote_tmux_session || 'mobile') + (tab?.tmuxSuffix ? `-${tab.tmuxSuffix}` : '');
         return paneIndex === 0 ? base : `${base}_${paneIndex + 1}`;
@@ -345,6 +353,22 @@ const Pane = ({
     refreshSignal: `${refreshNonce}:${cwdReadyTick}:${cwdVisibleTick}`,
     deferMs: isActive ? 0 : hiddenCwdDeferMs,
   });
+  /* A tab-level cwd is only a legacy fallback for panes from the same machine identity.
+     Mixed tabs must never feed a local path to a remote host (or the reverse). */
+  const inheritedTabCwd = (
+    (tab?.type === 'local' && isLocal)
+    || (tab?.type === 'host' && pane.hostId && pane.hostId === tab.hostId)
+  ) ? (cwd ?? tab?.cwd ?? null) : null;
+  const effectivePaneCwd = isLocal
+    ? (paneCwdRel ?? (paneCwdAbs ? null : (pane.cwd ?? inheritedTabCwd)))
+    : (
+      paneCwdAbs
+      ?? pane.cwd
+      ?? inheritedTabCwd
+      ?? remoteHost?.last_cwd
+      ?? remoteHost?.start_path
+      ?? null
+    );
   useEffect(() => {
     if (terminalReady && !paneCwdAbs) setCwdReadyTick((n) => n + 1);
   }, [terminalReady, paneCwdAbs]);
@@ -357,13 +381,13 @@ const Pane = ({
     const server = pane.hostId
       ? (hosts.find((h) => h.id === pane.hostId)?.name || pane.hostId)
       : (settings.localName || t?.('thisMachine') || '');
-    const text = buildItlHandle({ addr: paneAddress, server, cwd: paneCwdAbs || pane.cwd || '' });
+    const text = buildItlHandle({ addr: paneAddress, server, cwd: paneCwdAbs || effectivePaneCwd || '' });
     if (!text) return;
     // 클립보드에는 붙여넣어 바로 쓸 줄이 그대로, 토스트는 **무엇을** 복사했는지만 한 줄로.
     copyToClipboard(text).then((ok) => onNotify?.(ok
       ? `${t?.('copied') || 'Copied'} · ${itlHandleLabel({ addr: paneAddress, server })}`
       : (t?.('clipboardError') || 'Copy failed')));
-  }, [pane.hostId, pane.cwd, paneCwdAbs, paneAddress, hosts, settings.localName, onNotify, t]);
+  }, [pane.hostId, paneCwdAbs, effectivePaneCwd, paneAddress, hosts, settings.localName, onNotify, t]);
 
   // Git context path for sidebar Files/Git tabs:
   //   local: workspace-relative path ('' = root, null = outside workspace)
@@ -372,9 +396,7 @@ const Pane = ({
   // Live pane cwd for FileTree navigation:
   //   local: paneCwdRel ('' = root, null = outside workspace)
   //   host:  paneCwdAbs (latest explicit tmux read) → pane.cwd → tab.cwd → host.last_cwd → host.start_path → null
-  const livePaneCwd = isLocal
-    ? paneCwdRel
-    : (paneCwdAbs ?? pane.cwd ?? tab?.cwd ?? remoteHost?.last_cwd ?? remoteHost?.start_path ?? null);
+  const livePaneCwd = effectivePaneCwd;
 
   /* ── Terminal 로 내려가는 prop 의 참조 안정화 ────────────────────────────────
      Terminal 은 이 앱에서 가장 무거운 컴포넌트이고 `memo()` 로 감싸져 있는데, memo 는
@@ -416,13 +438,13 @@ const Pane = ({
             ? (tab?.color_index ?? 0)
             : (settings.localColorIndex ?? tab?.color_index ?? 0),
           paneName: pane.name || null,
-          cwd: isLocal ? (paneCwdRel ?? '') : (paneCwdAbs ?? pane.cwd ?? tab?.cwd ?? remoteHost?.last_cwd ?? remoteHost?.start_path ?? null),
+          cwd: effectivePaneCwd,
           cwdAbsolute: paneCwdAbs || null,
           paneCwdRel: paneCwdRel ?? null,
           takeoverPolicy: 'last-attach-wins',
         }), [
     tab, pane, paneIndex, hosts, settings.localIcon, settings.localColorIndex,
-    isLocal, paneCwdRel, paneCwdAbs, remoteHost,
+    isLocal, paneCwdRel, paneCwdAbs, effectivePaneCwd,
   ]);
   const handleHeaderFileSelect = useEvent((path) => onFileSelect?.(path, pane.hostId || null));
   const handleHeaderOpenTerminalAtFolder = useEvent(
@@ -432,15 +454,19 @@ const Pane = ({
   const handleTerminalBroadcast = useEvent((data) => onBroadcastData?.(pane.id, data));
   const bumpRefreshNonce = useEvent(() => setRefreshNonce((n) => n + 1));
   const paneCwdInfo = useMemo(
-    () => ({ isLocal, cwdAbs: paneCwdAbs || '', cwdRel: paneCwdRel || '' }),
-    [isLocal, paneCwdAbs, paneCwdRel],
+    () => ({
+      isLocal,
+      cwdAbs: paneCwdAbs || '',
+      cwdRel: isLocal ? (effectivePaneCwd ?? '') : '',
+    }),
+    [isLocal, paneCwdAbs, effectivePaneCwd],
   );
 
   // cwd 변할 때마다 부모(App.jsx)에 보고 → 자동 탭/pane 이름 갱신에 활용.
   // 원격은 workspace 상대경로가 없으므로 절대경로(paneCwdAbs)도 함께 보내 basename 으로 쓰게 한다.
   useEffect(() => {
     if (!onPaneCwdChange || !pane?.id) return;
-    onPaneCwdChange(pane.id, paneCwdRel ?? '', isLocal, paneCwdAbs ?? null);
+    onPaneCwdChange(pane.id, paneCwdRel, isLocal, paneCwdAbs ?? null);
   }, [onPaneCwdChange, pane?.id, paneCwdRel, paneCwdAbs, isLocal]);
 
   // ── 세션 재시작 ────────────────────────────────────────────────────────────
@@ -468,7 +494,7 @@ const Pane = ({
     if (restartingRef.current) return { ok: false, error: 'already restarting' };
     restartingRef.current = true;
     setRestartAt(Date.now());
-    const nextCwd = cwdOverride ?? restartCwdFor({ isLocal, paneCwdRel, paneCwdAbs });
+    const nextCwd = cwdOverride ?? effectivePaneCwd;
     const result = await killPaneSession({
       isLocal,
       sessionId: pane.sessionId,
@@ -481,7 +507,7 @@ const Pane = ({
     }
     restartingRef.current = false;
     return result;
-  }, [isEmpty, isLocal, paneCwdRel, paneCwdAbs, pane.sessionId, pane.hostId, remoteTmuxSession]);
+  }, [isEmpty, isLocal, effectivePaneCwd, pane.sessionId, pane.hostId, remoteTmuxSession]);
 
   useEffect(() => {
     if (!registerPaneActions || !pane?.id) return undefined;
@@ -492,11 +518,11 @@ const Pane = ({
       restartPathContext: {
         isLocal,
         hostId: pane.hostId || null,
-        initialPath: restartCwdFor({ isLocal, paneCwdRel, paneCwdAbs }) ?? '',
+        initialPath: effectivePaneCwd ?? '',
       },
     });
     return () => registerPaneActions(pane.id, null);
-  }, [registerPaneActions, pane?.id, pane?.hostId, restartSession, isLocal, paneCwdRel, paneCwdAbs]);
+  }, [registerPaneActions, pane?.id, pane?.hostId, restartSession, isLocal, effectivePaneCwd]);
 
   return (
     <div
@@ -750,6 +776,7 @@ const Pane = ({
             {/* pane 우상단 주소 배지(`탭.pane`) — **분할 여부와 무관하게 항상 단다.**
                 복사 버튼은 itl 이 있을 때만 붙는다(핸들이 `itl send` 라 없으면 무의미하다). */}
             <PaneAddressLabel
+              hidden={isMobile && !isMultiple}
               paneNumber={paneIndex + 1}
               tabNumber={tabNumber}
               fullAddress={paneAddress}
@@ -787,7 +814,7 @@ const Pane = ({
                 tabId={tab?.id}
                 // 재시작 직후 mount 에서만 살아있는 cwd 로 새 세션을 연다.
                 // 세션이 이미 있으면 백엔드가 cwd 쿼리를 무시하므로 남아 있어도 무해하다.
-                cwd={restartCwd ?? pane.cwd ?? cwd}
+                cwd={restartCwd ?? effectivePaneCwd}
                 /* 탐색기에서 끌어온 경로를 셸용 절대 경로로 환산하는 데 쓴다.
                    트리 경로가 로컬은 워크스페이스 상대, 원격은 절대라 두 표현이 다 필요하다. */
                 paneCwdInfo={paneCwdInfo}

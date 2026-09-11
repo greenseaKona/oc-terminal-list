@@ -50,8 +50,11 @@ const copyBtnStyle = {
 
 const PaneAddressLabel = memo(({
   paneNumber, tabNumber = null, fullAddress = null, isProminent = false,
-  onCopy = null, copyLabel = '',
-}) => (
+  onCopy = null, copyLabel = '', hidden = false,
+}) => {
+  if (hidden) return null;
+
+  return (
   <span
     className="iterm-pane-address"
     aria-hidden={onCopy ? undefined : true}
@@ -105,7 +108,8 @@ const PaneAddressLabel = memo(({
       </button>
     )}
   </span>
-));
+  );
+});
 
 PaneAddressLabel.displayName = 'PaneAddressLabel';
 

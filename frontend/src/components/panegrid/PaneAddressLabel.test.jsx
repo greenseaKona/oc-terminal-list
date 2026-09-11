@@ -78,4 +78,9 @@ describe('PaneAddressLabel', () => {
     const { container } = render(<PaneAddressLabel paneNumber={2} />);
     expect(badge(container).getAttribute('aria-hidden')).toBe('true');
   });
+
+  it('단일 pane 모바일에서는 터미널 프롬프트를 덮지 않도록 숨긴다', () => {
+    const { container } = render(<PaneAddressLabel paneNumber={1} hidden />);
+    expect(badge(container)).toBe(null);
+  });
 });
