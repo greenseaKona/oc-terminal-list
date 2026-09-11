@@ -13,6 +13,19 @@ const isNeutral = (hex) => {
   return Math.max(r, g, b) - Math.min(r, g, b) <= 2;
 };
 
+const relativeLuminance = (hex) => {
+  const channels = rgbOf(hex).map((value) => {
+    const normalized = value / 255;
+    return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  });
+  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+};
+
+const contrastRatio = (a, b) => {
+  const [lighter, darker] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
+  return (lighter + 0.05) / (darker + 0.05);
+};
+
 describe('buildThemeUI', () => {
   it('keeps light-theme secondary text neutral, not tinted', () => {
     // The regression: mix(fg, '#fff', …) parsed 'fff' as 0x000fff — blue, not white — so
@@ -37,6 +50,11 @@ describe('buildThemeUI', () => {
     expect(lum(ui.crust)).toBeLessThan(lum(ui.surface0));
     expect(lum(ui.surface0)).toBeLessThan(lum(ui.surface1));
     expect(lum(ui.surface1)).toBeLessThan(lum(ui.surface2));
+  });
+
+  it('keeps dark-theme secondary copy readable on chrome surfaces', () => {
+    const ui = buildThemeUI({ background: '#282c34', foreground: '#abb2bf' });
+    expect(contrastRatio(ui.subtext, ui.surface0)).toBeGreaterThanOrEqual(4.5);
   });
 
   it('reads the eink theme as a light theme', () => {

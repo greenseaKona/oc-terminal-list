@@ -148,6 +148,7 @@ export const buildThemeUI = (theme) => {
   // hover(surface0)가 크롬 바닥(crust)보다 확실히 밝아야 반응이 읽힌다.
   const white = '#ffffff';
   const crust = mix(bg, white, 0.06);
+  const text = mix(fg, white, 0.35);
   return {
     crust,                             // 가장 바깥 프레임 (탭바·사이드바 바탕)
     // pane 상단 레일·서브탭바가 쓰는 "한 단계 다른 톤". 테마가 직접 들고 온 값이 우선.
@@ -156,11 +157,10 @@ export const buildThemeUI = (theme) => {
     surface0: mix(bg, white, 0.10),
     surface1: mix(bg, white, 0.145),
     surface2: mix(bg, white, 0.20),
-    text:     fg,
-    // 크롬이 밝아진 만큼 보조 텍스트를 한 단계 내려 대비를 좁힌다.
-    // muted/faint 는 건드리지 않는다 — 비활성 탭 라벨(12px)이 이미 AA 하한 근처라
-    // 더 흐리면 가독성이 깨진다.
-    subtext:  mix(fg, bg, 0.32),
+    // Some terminal foreground palettes miss AA contrast on raised chrome. Brighten UI text
+    // independently so shell colors keep their original theme semantics.
+    text,
+    subtext:  mix(text, bg, 0.01),
     muted:    mix(fg, bg, 0.50),
     faint:    mix(fg, bg, 0.70),
     accent,
