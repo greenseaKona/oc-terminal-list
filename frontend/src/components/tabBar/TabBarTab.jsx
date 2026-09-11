@@ -143,6 +143,9 @@ export const Tab = memo(({
 
   return (
     <div
+      role="tab"
+      aria-selected={isActive}
+      tabIndex={isActive ? 0 : -1}
       // 모바일은 HTML5 draggable 대신 useTouchDragReorder 의 터치 이벤트를 spread.
       // 모바일 컨텍스트 메뉴는 우측 More 버튼으로 접근 (long-press 는 이제 드래그 진입).
       draggable={!isMobile}
@@ -166,6 +169,12 @@ export const Tab = memo(({
         zIndex: isDragOver ? 2 : (isActive ? 1 : 0),
       }}
       onClick={() => onSelect?.(tab.id)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect?.(tab.id);
+        }
+      }}
       /* 휠 클릭(가운데 버튼)으로 탭 닫기 확인 트리거 */
       onMouseDown={(e) => {
         if (e.button === 1) {
@@ -184,7 +193,7 @@ export const Tab = memo(({
           background: isDragOver
             ? `color-mix(in srgb, ${color.accent} 14%, ${tileBase})`
             : tabBase,
-          color: isActive ? color.text : color.muted,
+          color: isActive ? color.text : color.subtext,
           // Weight is fixed — the surface and the shape mark the active tab. Changing weight
           // makes the label width wobble every time you switch tabs.
           fontWeight: fontWeight.medium,
