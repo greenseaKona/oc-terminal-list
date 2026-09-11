@@ -41,7 +41,7 @@ const createInputQueue = ({
   onBroadcast,
   onDisconnected,
 }) => {
-  // 항목: { data, at } — at 은 큐에 들어온 시각(나이 판정용).
+  // 항목: { data, at, notBefore? } — at 은 나이, notBefore 는 키 간 경계 보존용.
   let queue = [];
   let flushTimer = null;
   // 소켓이 닫힌 걸 관측한 순간. 다시 열렸을 때 "끊긴 동안 쌓인 것"을 가려내는 기준.
@@ -85,10 +85,15 @@ const createInputQueue = ({
         queue.shift();
         continue;
       }
+      const waitMs = (head.notBefore || 0) - Date.now();
+      if (waitMs > 0) {
+        schedule(waitMs);
+        break;
+      }
       const chunk = next.length > INPUT_CHUNK ? next.slice(0, INPUT_CHUNK) : next;
       ws.send(chunk);
       sent += chunk.length;
-      if (next.length > INPUT_CHUNK) queue[0] = { data: next.slice(INPUT_CHUNK), at: head.at };
+      if (next.length > INPUT_CHUNK) queue[0] = { ...head, data: next.slice(INPUT_CHUNK) };
       else queue.shift();
     }
 
@@ -106,7 +111,13 @@ const createInputQueue = ({
     }
   };
 
-  const enqueue = (data, { broadcast = false, delay = 0, priority = false, dropQueuedWheel = false } = {}) => {
+  const enqueue = (data, {
+    broadcast = false,
+    delay = 0,
+    priority = false,
+    dropQueuedWheel = false,
+    separateTrailingEnterMs = 0,
+  } = {}) => {
     if (typeof data !== 'string' || data.length === 0) return false;
 
     // 밀린 휠 리포트를 걷어낸다 — 명령이 스크롤 뒤에 줄서지 않게(sendCommand 경로).
@@ -115,9 +126,22 @@ const createInputQueue = ({
     }
 
     trimToCap(data.length);
-    const item = { data, at: Date.now() };
-    if (priority) queue.unshift(item);
-    else queue.push(item);
+    const at = Date.now();
+    /* Agent TUIs distinguish a pasted burst from a real Enter by the input boundary. If
+       the trailing CR rides in the same queue item as the text, Codex can keep the text
+       in its composer without submitting it. Keep the command and Enter adjacent, but
+       make Enter a later WebSocket/PTY write so it is parsed as a key press. */
+    const splitEnter = separateTrailingEnterMs > 0 && data.length > 1 && data.endsWith('\r');
+    const items = splitEnter
+      ? [
+          { data: data.slice(0, -1), at, priority },
+          { data: '\r', at, notBefore: at + separateTrailingEnterMs, priority },
+        ]
+      : [{ data, at, priority }];
+    if (priority) {
+      const insertAt = queue.findIndex((item) => !item.priority);
+      queue.splice(insertAt < 0 ? queue.length : insertAt, 0, ...items);
+    } else queue.push(...items);
 
     const ws = getSocket();
     // 사용자가 타이핑하는데 서버가 한참 조용했다면 half-open 을 의심해 생존을 확인한다.
