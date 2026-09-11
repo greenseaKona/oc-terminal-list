@@ -21,8 +21,8 @@ import asyncssh
 import ptyprocess
 from fastapi import WebSocket, WebSocketDisconnect
 
-import multiplexer as mux
 import itl_key as itl_keys
+import multiplexer as mux
 import remote_panes
 from itl_channel import SentinelScanner
 from vault import decrypt_str
@@ -334,7 +334,6 @@ async def open_connection(
     private_key: str | None = None,
     passphrase: str | None = None,
     password: str | None = None,
-    known_hosts: bool = False,  # v1: TOFU off (모든 호스트 키 수락). v2: known_hosts 관리.
     kbdint_prompter=None,  # async (name, instructions, prompts) → list[str], OTP/2FA 인터랙티브용
 ) -> asyncssh.SSHClientConnection:
     """SSH 연결을 연다. 호출자가 finally 에서 close() 해야 함."""
@@ -342,7 +341,6 @@ async def open_connection(
         "host": host["hostname"],
         "port": int(host.get("port") or 22),
         "username": host["ssh_user"],
-        "known_hosts": None if not known_hosts else None,  # TOFU
         "connect_timeout": CONNECT_TIMEOUT,
         # ⚠️ connect_timeout 은 **TCP 연결까지**만 잰다. 인증 단계는 `login_timeout` 이고
         # asyncssh 기본이 120초다 — TCP 는 받아 주면서 인증에서 멈추는 호스트가 그 2분을

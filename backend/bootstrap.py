@@ -47,7 +47,7 @@ async def _ensure_bootstrap_key(username: str, key_path: str) -> str | None:
         if k.get("name") == BOOTSTRAP_KEY_NAME:
             return k["id"]
     try:
-        with open(key_path, "r", encoding="utf-8") as f:
+        with open(key_path, encoding="utf-8") as f:
             private_key = f.read()
     except OSError as e:
         logger.warning("bootstrap: cannot read key at %s (%s)", key_path, e)
@@ -57,12 +57,14 @@ async def _ensure_bootstrap_key(username: str, key_path: str) -> str | None:
         return None
     passphrase = os.getenv("BOOTSTRAP_HOST_KEY_PASSPHRASE", "").strip() or None
     key_id = str(uuid.uuid4())
+    encrypted_private_key = encrypt_str(private_key)
+    assert encrypted_private_key is not None
     await storage.create_ssh_key(
         key_id=key_id,
         username=username,
         name=BOOTSTRAP_KEY_NAME,
         public_key=None,
-        private_key_enc=encrypt_str(private_key),
+        private_key_enc=encrypted_private_key,
         passphrase_enc=encrypt_str(passphrase) if passphrase else None,
     )
     logger.info("bootstrap: created SSH key entry for %s", username)
@@ -150,7 +152,7 @@ async def _probe_remote_tmux(hostname: str, port: int, ssh_user: str, key_path: 
     반환값: "yes" | "no" | "unknown" (unknown = SSH 자체 실패, MFA 강제 등)."""
     try:
         import asyncssh  # 백엔드 dep
-        with open(key_path, "r", encoding="utf-8") as f:
+        with open(key_path, encoding="utf-8") as f:
             private_key = f.read()
         passphrase = os.getenv("BOOTSTRAP_HOST_KEY_PASSPHRASE", "").strip() or None
         async with asyncssh.connect(
@@ -158,11 +160,12 @@ async def _probe_remote_tmux(hostname: str, port: int, ssh_user: str, key_path: 
             port=port,
             username=ssh_user,
             client_keys=[asyncssh.import_private_key(private_key, passphrase=passphrase)],
-            known_hosts=None,  # 첫 부팅 — TOFU
             connect_timeout=8,
         ) as conn:
             result = await conn.run("command -v tmux >/dev/null 2>&1 && echo yes || echo no", check=False)
-            return "yes" if (result.stdout or "").strip().endswith("yes") else "no"
+            stdout = result.stdout or b""
+            text = stdout if isinstance(stdout, str) else stdout.decode("utf-8", errors="replace")
+            return "yes" if text.strip().endswith("yes") else "no"
     except Exception as e:
         logger.info("bootstrap: tmux probe could not connect to %s@%s:%d (%s)", ssh_user, hostname, port, e)
         return "unknown"
