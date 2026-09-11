@@ -44,8 +44,14 @@ const Login = ({ onLogin, language = 'en', theme = null, einkMode = false, onTog
   useEffect(() => {
     if (typeof window === 'undefined' || !window.visualViewport) return;
     const vv = window.visualViewport;
+    let maxVvHeight = vv.height;
+    
     const update = () => {
-      const keyboardUp = vv.height < window.innerHeight - 60;
+      // Chrome on Android has buggy window.innerHeight on initial load.
+      // Tracking the max visual viewport height seen is much more reliable for detecting keyboard.
+      if (vv.height > maxVvHeight) maxVvHeight = vv.height;
+      const keyboardUp = vv.height < maxVvHeight - 150;
+      
       /* 오버레이는 `inset: 0` 이라 이미 상자를 채운다 — 평소에는 아무것도 덮어쓰지 않는다.
          키보드가 올라온 동안만 가시 영역으로 줄인다(그때는 레이아웃 뷰포트가 안 줄어든다). */
       setVpStyle({
@@ -209,15 +215,11 @@ const Login = ({ onLogin, language = 'en', theme = null, einkMode = false, onTog
       ...(isMobile && vpStyle ? vpStyle : {}),
     }}>
       {!einkMode && (
-        <>
-          <div style={{
-            ...themed.bgDots,
-            backgroundImage: dotBg,
-            backgroundSize: dotSizeBg,
-          }} />
-          <div style={themed.bgGlow} />
-          <div style={themed.bgVignette} />
-        </>
+        <div style={{
+          ...themed.bgDots,
+          backgroundImage: dotBg,
+          backgroundSize: dotSizeBg,
+        }} />
       )}
 
       {/* 카드 + 아래의 이북 스위치를 한 세로 묶음으로. overlay 는 row flex 이고, 모바일에서

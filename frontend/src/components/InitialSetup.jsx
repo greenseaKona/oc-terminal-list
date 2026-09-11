@@ -53,7 +53,7 @@ const InitialSetup = ({ onComplete, language = 'en' }) => {
     if (typeof window === 'undefined' || !window.visualViewport) return;
     const vv = window.visualViewport;
     const update = () => {
-      const keyboardUp = vv.height < window.innerHeight - 60;
+      const keyboardUp = vv.height < window.innerHeight - 200;
       setVpStyle({
         height: `${vv.height}px`,
         width: `${vv.width}px`,
@@ -279,7 +279,7 @@ const styles = {
   },
   sub: {
     fontSize: fontSize['13'],
-    color: color.muted,
+    color: color.subtext,
     textAlign: 'center',
     lineHeight: 1.5,
     marginBottom: 0,
@@ -307,7 +307,7 @@ const styles = {
   },
   hint: {
     fontSize: fontSize['11'],
-    color: color.muted,
+    color: color.subtext,
   },
   inputWrap: {
     display: 'flex',
@@ -342,7 +342,7 @@ const styles = {
   footer: {
     marginTop: space['2'],
     fontSize: fontSize['11'],
-    color: color.muted,
+    color: color.subtext,
     textAlign: 'center',
   },
 };

@@ -21,7 +21,7 @@ const MOBILE_BOTTOM_GAP = 8;
 // 모달과 가시 영역 상단 사이 최소 간격 — 키보드 + 모달이 화면을 다 차지해도 위로 빈틈이 보이게.
 const MOBILE_TOP_GAP = 12;
 // 가시 영역이 이만큼 줄면 키보드가 올라온 것으로 본다(브라우저 UI 바 변동은 이보다 작다).
-const KEYBOARD_SHRINK_THRESHOLD = 60;
+const KEYBOARD_SHRINK_THRESHOLD = 200;
 /* 키보드가 "내려갔다" 를 **확정하기 전에 기다리는 시간.** 즉시 판정하면 올라오는 도중의
    한 프레임짜리 흔들림 하나가 그대로 blur 가 되어, 키보드가 올라왔다 곧바로 내려간다.
    여는 애니메이션보다 길게(iOS ~250ms), 사람이 알아채기에는 짧게. */
