@@ -50,6 +50,8 @@ DRAIN_CONCURRENCY = 4
 #: 큰따옴표 안의 `\t` 는 백슬래시와 t 두 글자로 그대로 나가고, 그러면 `read` 가 못 쪼개
 #: **아무것도 안 걷힌다**(조용히). 그래서 파이썬 쪽에서 실제 탭 문자를 박는다.
 _TAB = "\t"
+_CWD_ROW = "C"
+_OUTBOX_ROW = "O"
 
 #: tmux 세션명·주소는 우리가 만든 값이라 셸 인용을 지나도 그대로다. 그래도 인용한다.
 _SESSION_SAFE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
@@ -83,12 +85,17 @@ def drain_command(addrs: dict[str, str] | None = None) -> str:
 
 
 DRAIN_CMD = (
-    'tmux list-sessions '
-    f'-F "#{{session_name}}{_TAB}#{{session_attached}}{_TAB}#{{@itl_outbox}}" '
-    "2>/dev/null | while IFS=\"$(printf '\\t')\" read -r s a v; do "
+    # The existing host-wide round trip also carries the active pane cwd. The C/O
+    # discriminator keeps paths and outbox JSON separate without another SSH exec.
+    'tmux list-panes -a '
+    f'-F "#{{session_name}}{_TAB}#{{window_active}}{_TAB}#{{pane_active}}{_TAB}#{{pane_current_path}}'
+    f'{_TAB}#{{session_attached}}{_TAB}#{{@itl_outbox}}" '
+    "2>/dev/null | while IFS=\"$(printf '\\t')\" read -r s w p c a v; do "
+    '  [ "$w" = "1" ] && [ "$p" = "1" ] || continue; '
+    f'  printf "{_CWD_ROW}\\t%s\\t%s\\n" "$s" "$c"; '
     '  [ -n "$v" ] || continue; '
     '  tmux set-option -u -t "$s" @itl_outbox >/dev/null 2>&1; '
-    '  printf "%s\\t%s\\n" "$s" "$v"; '
+    f'  printf "{_OUTBOX_ROW}\\t%s\\t%s\\n" "$s" "$v"; '
     "done"
 )
 
@@ -102,11 +109,45 @@ def parse_drain(text: str | None) -> list[tuple[str, str]]:
     for line in (text or "").splitlines():
         if not line.strip():
             continue
+        if line.startswith(f"{_CWD_ROW}\t"):
+            continue
+        if line.startswith(f"{_OUTBOX_ROW}\t"):
+            line = line[2:]
         parts = line.split("\t", 1)
         if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
             continue
         out.append((parts[0].strip(), parts[1].strip()))
     return out
+
+
+def parse_remote_cwds(text: str | None) -> dict[str, str]:
+    """Parse tagged cwd rows from the shared remote sweep."""
+    out: dict[str, str] = {}
+    for line in (text or "").splitlines():
+        if not line.startswith(f"{_CWD_ROW}\t"):
+            continue
+        parts = line.split("\t", 2)
+        if len(parts) == 3 and parts[1].strip() and parts[2].strip():
+            out[parts[1].strip()] = parts[2]
+    return out
+
+
+# (username, host id) -> last known path per session. Only changed paths cross SSE.
+_remote_cwd_cache: dict[tuple[str, str], dict[str, str]] = {}
+
+
+def _publish_remote_cwds(username: str, host_id: str, cwds: dict[str, str]) -> None:
+    key = (username, host_id)
+    previous = _remote_cwd_cache.get(key, {})
+    changed: dict[str, str | None] = {
+        session: cwd for session, cwd in cwds.items() if previous.get(session) != cwd
+    }
+    changed.update({session: None for session in previous.keys() - cwds.keys()})
+    _remote_cwd_cache[key] = dict(cwds)
+    if not changed:
+        return
+    from sse_broadcast import _broadcast_sse
+    _broadcast_sse({"type": "remoteCwd", "hostId": host_id, "cwds": changed}, username=username)
 
 
 async def _hosts_with_remote_panes(username: str) -> set[str]:
@@ -140,6 +181,7 @@ async def _drain_host(host_id: str, username: str) -> None:
     _rc, raw, _err = await run_remote_cmd_pooled(
         host, secrets, drain_command(addrs), timeout=DRAIN_TIMEOUT_SEC,
     )
+    _publish_remote_cwds(username, host_id, parse_remote_cwds(raw))
     for session, payload in parse_drain(raw):
         msg = parse_sentinel(payload)
         if not msg:

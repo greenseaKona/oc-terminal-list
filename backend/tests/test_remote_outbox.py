@@ -35,6 +35,27 @@ class TestParseDrain:
         """JSON 안에 리터럴 탭은 못 들어가지만, 나누는 것은 첫 탭 하나뿐이어야 한다."""
         assert remote_outbox.parse_drain("s\ta\tb")[0] == ("s", "a\tb")
 
+    def test_cwd_행은_우편함으로_읽지_않는다(self):
+        raw = 'C\tmobile\t/srv/app\nO\tmobile\t{"to":"1.1","text":"x"}\n'
+        assert remote_outbox.parse_drain(raw) == [("mobile", '{"to":"1.1","text":"x"}')]
+
+
+class TestParseRemoteCwds:
+    def test_활성_pane_경로를_세션별로_읽는다(self):
+        raw = "C\tmobile\t/srv/app\nC\tmobile-2\t/home/pi\n"
+        assert remote_outbox.parse_remote_cwds(raw) == {
+            "mobile": "/srv/app",
+            "mobile-2": "/home/pi",
+        }
+
+    def test_우편함_행과_비정상_행은_무시한다(self):
+        raw = 'O\tmobile\t{"text":"x"}\nC\t\t/no-session\nplain\n'
+        assert remote_outbox.parse_remote_cwds(raw) == {}
+
+    def test_경로_앞뒤_공백을_보존한다(self):
+        raw = "C\tmobile\t/srv/project  \n"
+        assert remote_outbox.parse_remote_cwds(raw) == {"mobile": "/srv/project  "}
+
 
 class TestDrainCommand:
     def test_붙어_있어도_비운다(self):
@@ -52,7 +73,7 @@ class TestDrainCommand:
         """⚠️ 나누면 그 사이에 다음 주기가 같은 통을 또 집는다."""
         cmd = remote_outbox.DRAIN_CMD
         assert "set-option -u" in cmd and "printf" in cmd
-        assert cmd.index("set-option -u") < cmd.index('printf "%s\\t%s')
+        assert cmd.index("set-option -u") < cmd.index('printf "O\\t%s\\t%s')
 
     def test_빈_우편함은_건너뛴다(self):
         assert '[ -n "$v" ] || continue' in remote_outbox.DRAIN_CMD
@@ -128,7 +149,7 @@ class TestDrainHost:
         assert "set-option -t mobile @pane_addr 1.2" in cmd
         assert "set-option -t mobile-x @pane_addr 2.1" in cmd
         assert cmd.endswith(remote_outbox.DRAIN_CMD)
-        assert cmd.index("@pane_addr") < cmd.index("list-sessions")
+        assert cmd.index("@pane_addr") < cmd.index("list-panes")
 
     def test_모양이_아닌_값은_명령에_안_싣는다(self):
         """세션명·주소는 우리가 만든 값이지만 셸 명령에 들어가는 이상 걸러 둔다."""
@@ -148,8 +169,56 @@ class TestDrainHost:
             patch("itl_router.deliver_from_pane", AsyncMock()) as deliver,
         ):
             await remote_outbox._drain_host("h1", "u")
-        cmd = run.await_args.args[2]
-        assert "set-option -t mobile @pane_addr 3.1" in cmd and "list-sessions" in cmd
+        cmd = run.await_args_list[0].args[2]
+        assert "set-option -t mobile @pane_addr 3.1" in cmd and "list-panes" in cmd
         deliver.assert_awaited_once()
-        assert deliver.await_args.kwargs == {"host_id": "h1"}
-        assert deliver.await_args.args[1] == "mobile"
+        deliver_call = deliver.await_args_list[0]
+        assert deliver_call.kwargs == {"host_id": "h1"}
+        assert deliver_call.args[1] == "mobile"
+
+    async def test_cwd는_같은_왕복에서_변경분만_sse로_보낸다(self):
+        remote_outbox._remote_cwd_cache.clear()
+        run = AsyncMock(return_value=(0, "C\tmobile\t/srv/app\n", ""))
+        with (
+            patch("host_common.resolve_host_with_secrets",
+                  AsyncMock(return_value=({"id": "h1"}, {}))),
+            patch("host_common.run_remote_cmd_pooled", run),
+            patch("pane_addr.remote_addresses_for_host", AsyncMock(return_value={})),
+            patch("sse_broadcast._broadcast_sse") as broadcast,
+        ):
+            await remote_outbox._drain_host("h1", "u")
+            await remote_outbox._drain_host("h1", "u")
+
+        broadcast.assert_called_once_with(
+            {"type": "remoteCwd", "hostId": "h1", "cwds": {"mobile": "/srv/app"}},
+            username="u",
+        )
+
+    def test_사라진_세션은_null로_알리고_캐시에서도_지운다(self):
+        remote_outbox._remote_cwd_cache.clear()
+        with patch("sse_broadcast._broadcast_sse") as broadcast:
+            remote_outbox._publish_remote_cwds("u", "h1", {
+                "mobile": "/srv/app",
+                "old": "/srv/old",
+            })
+            broadcast.reset_mock()
+
+            remote_outbox._publish_remote_cwds("u", "h1", {"mobile": "/srv/app"})
+
+        broadcast.assert_called_once_with(
+            {"type": "remoteCwd", "hostId": "h1", "cwds": {"old": None}},
+            username="u",
+        )
+        assert remote_outbox._remote_cwd_cache[("u", "h1")] == {"mobile": "/srv/app"}
+
+    def test_빈_snapshot도_기존_세션_제거를_알린다(self):
+        remote_outbox._remote_cwd_cache.clear()
+        remote_outbox._remote_cwd_cache[("u", "h1")] = {"mobile": "/srv/app"}
+
+        with patch("sse_broadcast._broadcast_sse") as broadcast:
+            remote_outbox._publish_remote_cwds("u", "h1", {})
+
+        broadcast.assert_called_once_with(
+            {"type": "remoteCwd", "hostId": "h1", "cwds": {"mobile": None}},
+            username="u",
+        )
