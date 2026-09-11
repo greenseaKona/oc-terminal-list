@@ -210,16 +210,17 @@ const SubTabBar = ({
           // 서브탭바는 **유리판**이다 — 아래 터미널이 비쳐 흐려지므로, 불투명 면끼리
           // 몇 % 차이로 겨루던 문제(테마에 따라 메인바와 구분이 사라짐)가 원천적으로 없다.
           // 색은 바가 아니라 각 칩의 번호 박스가 나른다.
-          ...glassPanelStyle(),
+          background: subUi.mantle,
           // 유리판이라도 맞닿는 경계는 선으로 못박는다 — 배경이 밝은 테마에서 blur 만으로는
           // 위 행과의 경계가 약해진다.
           borderTop: `1px solid ${subUi.borderStrong}`,
+          borderBottom: `1px solid ${subUi.borderStrong}`,
           boxShadow: 'none',
           boxSizing: 'border-box',
           overflowX: 'auto',
           overflowY: 'hidden',
           flexShrink: 0,
-          padding: '0 4px 0 6px',
+          padding: '0 4px 0 16px',
           // 메인 탭바(6px)보다 한 단계 좁게 — 서브 행은 밀도가 더 촘촘해야 위계가 산다.
           gap: '5px',
           fontFamily: font.sans,
@@ -251,8 +252,8 @@ const SubTabBar = ({
           // 칩은 색을 싣지 않는다 — 유리판 위 반투명 면으로만 활성/비활성을 가른다.
           // pane 색은 아래 번호 박스가 나른다(색이 한 곳에만 있어야 시끄럽지 않다).
           const tabBg = isActive
-            ? `color-mix(in srgb, ${subUi.surface1} 62%, transparent)`
-            : `color-mix(in srgb, ${subUi.surface0} 26%, transparent)`;
+            ? `color-mix(in srgb, ${paneAccent} 18%, ${subUi.mantle})`
+            : 'transparent';
           // ring/outline 은 칩이 실제로 얹힌 바탕색을 따라가야 주변과 깔끔히 분리된다.
           const chipBase = tabBg;
           const isDragging = touchReorder.draggingId === pane.id;
@@ -309,8 +310,8 @@ const SubTabBar = ({
                   fontWeight: fontWeight.medium,
                   fontSize: fontSize['11'],   // 메인 탭(12px) 아래 한 단계
                   border: 'none',
-                  boxShadow: isDragOver ? `inset 0 0 0 2px ${color.accent}` : 'none',
-                  borderRadius: radius.sm,
+                  boxShadow: isDragOver ? `inset 0 0 0 2px ${color.accent}` : (isActive ? `inset 0 0 0 1px color-mix(in srgb, ${paneAccent} 35%, transparent)` : 'none'),
+                  borderRadius: '999px',
                   boxSizing: 'border-box',
                   transition: 'background 120ms, color 120ms, box-shadow 120ms',
                 }}
@@ -324,6 +325,7 @@ const SubTabBar = ({
                       ...numberTileStyle({ size: SUB_ICON_PX, fontSize: '9px', base: 'transparent' }),
                       background: `color-mix(in srgb, ${paneAccent} ${isActive ? 30 : 16}%, transparent)`,
                       border: `1px solid color-mix(in srgb, ${paneAccent} ${isActive ? 46 : 24}%, transparent)`,
+                      borderRadius: '999px',
                       color: isActive ? subUi.text : subUi.subtext,
                     }}
                   >
