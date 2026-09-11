@@ -4,19 +4,15 @@
 // 절대 import 하지 않는다 — 시작 경로에서 빼야 모바일 초기 로딩바가 무거운 에디터 청크를 안 기다린다.
 // 대신: (1) FileEditor(지연 로드)가 모듈 로드 시 호출하고, (2) main.jsx 가 앱 뜬 뒤 idle 에 prefetch.
 import { loader } from '@monaco-editor/react';
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import * as monaco from 'monaco-editor';
 // 언어 서비스 contribution — 이게 있어야 아래 워커들이 실제로 물려 IntelliSense/검증이 동작한다.
 // (editor.api 코어만으론 monarch 색상만 있고 자동완성·hover·진단은 없다.) monaco-vendor 는
 // 앱 시작이 아닌 에디터 최초 오픈 시점에 지연 로드되므로 시작 성능엔 영향 없다.
-import 'monaco-editor/esm/vs/language/typescript/monaco.contribution';
-import 'monaco-editor/esm/vs/language/json/monaco.contribution';
-import 'monaco-editor/esm/vs/language/css/monaco.contribution';
-import 'monaco-editor/esm/vs/language/html/monaco.contribution';
-import editorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker';
-import jsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker';
-import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
-import htmlWorker from 'monaco-editor/esm/vs/language/html/html.worker?worker';
-import tsWorker from 'monaco-editor/esm/vs/language/typescript/ts.worker?worker';
+import editorWorker from 'monaco-editor/editor/editor.worker?worker';
+import jsonWorker from 'monaco-editor/languages/features/json/json.worker?worker';
+import cssWorker from 'monaco-editor/languages/features/css/css.worker?worker';
+import htmlWorker from 'monaco-editor/languages/features/html/html.worker?worker';
+import tsWorker from 'monaco-editor/languages/features/typescript/ts.worker?worker';
 
 let configured = false;
 
@@ -43,7 +39,7 @@ export function setupMonaco() {
 function configureLanguages(monaco) {
   // typescript 네임스페이스는 언어 contribution 이 로드된 뒤에만 존재한다. editor-core API 만
   // 로드된 순간엔 undefined 일 수 있으므로 방어적으로 접근 — 없으면 조용히 건너뛴다(현행 동작 유지).
-  const ts = monaco.languages?.typescript;
+  const ts = monaco.typescript;
   if (ts?.typescriptDefaults && ts?.javascriptDefaults) {
     // 프로젝트 컨텍스트 없는 단일 파일 편집 — 의미검증(빨간 물결: "모듈 못 찾음" 등)은 끄고,
     // 자동완성·hover·시그니처 도움말(TS 워커가 제공)은 그대로 살린다. eager sync 로 반응성 향상.
