@@ -428,6 +428,7 @@ export const ko = {
     terminateFailed: '세션 종료 실패: {err}',
     retry: '다시 시도',
     cannotReach: '호스트에 닿을 수 없음',
+    hostNotFound: '호스트가 더 이상 없어 터미널을 열지 못했습니다.',
     attached: '연결됨',
     remote: '원격',
     untitled: '이름 없음',

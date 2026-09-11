@@ -425,6 +425,7 @@ export const en = {
     terminateFailed: 'Failed to terminate session: {err}',
     retry: 'Retry',
     cannotReach: 'Cannot reach host',
+    hostNotFound: 'The host no longer exists, so the terminal could not be opened.',
     attached: 'attached',
     remote: 'remote',
     untitled: 'Untitled',
