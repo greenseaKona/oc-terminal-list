@@ -18,14 +18,14 @@ import host_tmux
 import multiplexer as mux
 import session_tombstones
 from _deps import verify_auth_token
-from remote_platform import PLATFORM_PROBE, classify_platform
 from cache import cache, invalidate_host, key_host_tmux_clients, key_host_tmux_sessions
 from host_manager import resolve_host_secrets
-from vault import encrypt_str
-from ws_clients import _client_identity_payload
 from models import HostUpsertRequest
+from remote_platform import PLATFORM_PROBE, classify_platform
 from sqlite_storage import storage
 from ssh_pool import ssh_pool
+from vault import encrypt_str
+from ws_clients import _client_identity_payload
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,7 @@ HOST_TMUX_ERROR_TTL_SEC = 30
 # 여러 호스트를 한 번에 볼 때의 **전체** 마감. 살아 있는 호스트는 1초 안에 답하므로,
 # 여기 걸리는 것은 꺼졌거나 아픈 호스트다 — 그것 하나 때문에 화면 전체가 기다릴 이유가 없다.
 BATCH_TMUX_DEADLINE_SEC = float(os.getenv("BATCH_TMUX_DEADLINE_SEC", "6"))
+SSH_KILL_COMMAND_TIMEOUT_SEC = float(os.getenv("SSH_KILL_COMMAND_TIMEOUT_SEC", "15"))
 
 
 @router.get("/api/hosts")
@@ -136,6 +137,13 @@ async def _stdout_of(awaitable) -> str:
     return out if isinstance(out, str) else (out or b"").decode("utf-8", errors="replace")
 
 
+async def _run_ssh_command(conn, command: str) -> str:
+    return await _stdout_of(asyncio.wait_for(
+        conn.run(command, check=False),
+        timeout=SSH_KILL_COMMAND_TIMEOUT_SEC,
+    ))
+
+
 @router.post("/api/hosts/{host_id}/kill-tmux")
 async def kill_host_tmux(
     host_id: str,
@@ -177,7 +185,7 @@ async def kill_host_tmux(
     이건 폴링이 아니라 사람이 누른 한 번이지만, 이미 열려 있는 소켓을 두고 새로
     연결할 이유는 없다.
     """
-    from host_manager import DEFAULT_REMOTE_TMUX_SESSION, open_connection
+    from host_manager import CONN_CLOSE_TIMEOUT_SEC, DEFAULT_REMOTE_TMUX_SESSION, open_connection
     host = await storage.get_host(host_id, username)
     if not host:
         raise HTTPException(status_code=404, detail="호스트를 찾을 수 없습니다")
@@ -223,17 +231,20 @@ async def kill_host_tmux(
                 # 이 엔드포인트가 느려진 원인(핸드셰이크)을 그대로 두 배로 만든다.
                 if not force and not allow_attached:
                     await host_tmux.assert_not_attached(
-                        lambda: _stdout_of(conn.run(host_tmux.LIST_SSH_CMD, check=False)),
+                        lambda: _run_ssh_command(conn, host_tmux.LIST_SSH_CMD),
                         target_session)
-                await conn.run(cmd, check=False)
+                await _run_ssh_command(conn, cmd)
             finally:
                 conn.close()
-                await conn.wait_closed()
+                try:
+                    await asyncio.wait_for(conn.wait_closed(), timeout=CONN_CLOSE_TIMEOUT_SEC)
+                except TimeoutError:
+                    pass
     except host_tmux.SessionInUseError:
         raise HTTPException(status_code=409, detail=SESSION_IN_USE_DETAIL) from None
     except Exception as e:
         logger.error("kill-tmux failed (%s, force=%s, session=%s): %s", host_id, force, target_session, e)
-        raise HTTPException(status_code=500, detail="tmux 세션 종료에 실패했습니다.")
+        raise HTTPException(status_code=500, detail="tmux 세션 종료에 실패했습니다.") from e
     if not force and not recreate:
         # ⚠️ **지우면 지워져야 한다.** 브리지는 세션이 사라진 것을 보면 `create=1` 로 다시
         # 만든다(호스트 재부팅 복구용). 사용자가 직접 지운 경우엔 그게 정반대로 작동해
@@ -307,7 +318,11 @@ async def get_host_tmux_clients(
                     password=secrets["password"],
                 )
             result = await ssh_pool.run(host_id, _opener, cmd, check=False)
-            output = result.stdout if isinstance(result.stdout, str) else (result.stdout or b"").decode("utf-8", errors="replace")
+            output = (
+                result.stdout
+                if isinstance(result.stdout, str)
+                else (result.stdout or b"").decode("utf-8", errors="replace")
+            )
     except Exception as e:
         logger.warning("tmux-clients query failed (%s/%s): %s", host_id, session, e)
         # 실패 시 알 수 없음 — 0 으로 보내 프론트가 그냥 진행하게.
@@ -368,7 +383,11 @@ async def check_host_tmux(
             )
             try:
                 result = await conn.run(cmd, check=False)
-                output = result.stdout if isinstance(result.stdout, str) else (result.stdout or b"").decode("utf-8", errors="replace")
+                output = (
+                    result.stdout
+                    if isinstance(result.stdout, str)
+                    else (result.stdout or b"").decode("utf-8", errors="replace")
+                )
             finally:
                 conn.close()
                 await conn.wait_closed()
@@ -425,7 +444,11 @@ async def _fetch_host_tmux_sessions(host: dict, host_id: str, username: str, ref
                     password=secrets["password"],
                 )
             result = await ssh_pool.run(host_id, _opener, cmd, check=False)
-            output = result.stdout if isinstance(result.stdout, str) else (result.stdout or b"").decode("utf-8", errors="replace")
+            output = (
+                result.stdout
+                if isinstance(result.stdout, str)
+                else (result.stdout or b"").decode("utf-8", errors="replace")
+            )
     except Exception as e:
         # 자세한 사유는 로그에만 — 응답에는 generic 메시지로 누출 방지.
         logger.warning("list-tmux-sessions failed (%s): %s", host_id, e)
@@ -471,7 +494,7 @@ async def batch_host_tmux_sessions(
     # 없음" while its terminal connected fine, because the single-host route reads
     # `get_host`. The home screen simply never listed resumable sessions for those hosts.
     full = await asyncio.gather(*[storage.get_host(h["id"], username) for h in picked])
-    hosts = [f or h for f, h in zip(full, picked)]
+    hosts = [f or h for f, h in zip(full, picked, strict=True)]
 
     # ⚠️ **가장 느린 호스트가 전체의 대기 시간이 된다.** gather 는 다 끝나야 돌아오므로,
     # 꺼진 호스트 하나가 "이어할 수 있는 세션" 구획을 통째로 붙잡는다(실측으로 겪은 그것).
@@ -538,5 +561,3 @@ async def delete_host(host_id: str, username: str = Depends(verify_auth_token)):
     # 그 전에 지우고 싶으면 대시보드의 삭제 버튼이 즉시 처리한다.
     await storage.retire_llm_source(username, host_id)
     return {"id": host_id, "status": "deleted"}
-
-

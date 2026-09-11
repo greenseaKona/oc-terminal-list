@@ -4,6 +4,8 @@
 종료하자 쓰던 세션이 같이 죽었다. 목록 쪽 필터(`!s.attached`)는 있었지만 60초 캐시된
 스냅샷 위에서 돌았고, 서버는 아무것도 다시 확인하지 않았다.
 """
+from unittest.mock import AsyncMock
+
 import pytest
 
 import host_tmux
@@ -183,3 +185,50 @@ def test_both_paths_share_one_parser():
     body = inspect.getsource(route._fetch_host_tmux_sessions)
     assert body.count("parse_session_rows") == 0 or "host_tmux.parse_session_rows" in body
     assert 'line.split("|")' not in body, "손으로 쪼개는 코드가 남아 있다"
+
+
+@pytest.mark.anyio
+async def test_a_hanging_ssh_kill_is_bounded(monkeypatch):
+    import asyncio
+
+    from fastapi import HTTPException
+
+    import host_manager
+    from routes import hosts as route
+
+    class HangingConnection:
+        closed = False
+
+        async def run(self, *_args, **_kwargs):
+            await asyncio.sleep(3600)
+
+        def close(self):
+            self.closed = True
+
+        async def wait_closed(self):
+            await asyncio.sleep(3600)
+
+    connection = HangingConnection()
+    monkeypatch.setattr(route.storage, "get_host", AsyncMock(return_value={
+        "id": "h1", "hostname": "host", "ssh_user": "user",
+        "auth_method": "password", "multiplexer": "tmux",
+        "remote_tmux_session": "mobile",
+    }))
+    monkeypatch.setattr(route, "resolve_host_secrets", lambda *_args: {
+        "private_key": None, "passphrase": None, "password": "secret",
+    })
+    monkeypatch.setattr(host_manager, "open_connection", AsyncMock(return_value=connection))
+    monkeypatch.setattr(route, "SSH_KILL_COMMAND_TIMEOUT_SEC", 0.01)
+    monkeypatch.setattr(host_manager, "CONN_CLOSE_TIMEOUT_SEC", 0.01)
+
+    with pytest.raises(HTTPException) as error:
+        await asyncio.wait_for(
+            route.kill_host_tmux(
+                "h1", force=True, session=None, allow_attached=False,
+                recreate=False, username="admin",
+            ),
+            timeout=1,
+        )
+
+    assert error.value.status_code == 500
+    assert connection.closed
