@@ -27,9 +27,13 @@ import { applyEinkAttribute, applyEinkSettings, resolveEinkThemeId } from './uti
 import { tokens } from './styles/tokens';
 import { generateUUID } from './utils/helpers';
 import { cleanLaunch } from './utils/launchOptions';
+import { TMUX, fromHost as multiplexerFromHost, normalize as normalizeMultiplexer } from './utils/multiplexer';
 import { authHeaders } from './utils/auth';
 import { apiFetch } from './utils/apiFetch';
 import { resolveWorkspacePath } from './utils/terminalFileLinks';
+import {
+  paneCloseIdentity, resolveConfirmedPane, resolveConfirmedTab, tabCloseIdentity,
+} from './utils/confirmedClose';
 import { loadDraft, saveDraft } from './utils/quickInputDraft';
 import {
   makeLeaf, treeFromLegacyLayout, splitLeaf, removeLeaf, ensureTree,
@@ -39,7 +43,7 @@ import { appendPaneAsSplit } from './utils/tabPaneOpen';
 // 탭/pane 상태 전이 순수 리듀서 — 로직은 utils/tabOperations.js 가 소유(테스트 있음).
 import {
   splitPaneOp, dropTabToSplitPaneOp, activatePaneOp, reorderPaneOp, dropPaneToSplitOp,
-  removePaneOp, planPaneClose, extractPaneToTabOp,
+  removePaneOp, planPaneClose, collectTabCloseTargets, extractPaneToTabOp,
 } from './utils/tabOperations';
 import {
   makePane, makLocalTab, makeFreshHostTmuxSessionName,
@@ -106,6 +110,8 @@ function App() {
   // 탭 상태 + 영속(localStorage·서버 저장/복원/SSE)은 useWorkspaceTabs 가 단일 소유.
   // 탭 "조작"(추가/닫기/분할/열기 등)은 아래 App 본체에 남아 setTabs/setActiveTabId 를 쓴다.
   const { tabs, setTabs, activeTabId, setActiveTabId, isRestoringWorkspace, setIsRestoringWorkspace } = useWorkspaceTabs({ isAuthenticated });
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
   // 딥링크(`?open=<sessionId>`, 텔레그램 "열기" 버튼 등) → 그 세션 탭·pane 활성화.
   // 복원이 끝나야 탭이 채워지므로 ready 로 "포기 시점"을 알려준다.
   useDeepLinkOpen({ tabs, setActiveTabId, setTabs, ready: isAuthenticated && !isRestoringWorkspace });
@@ -286,31 +292,37 @@ function App() {
     const tab = tabs.find((tt) => tt.id === tabId);
     const pane = tab?.panes?.find((p) => p.id === paneId);
     if (!tab || !pane) return;
-    const paneIndex = tab.panes.findIndex((p) => p.id === paneId);
+    const expectedPaneIdentity = paneCloseIdentity(pane);
 
     const doClose = () => {
+      const resolved = resolveConfirmedPane(tabsRef.current, tabId, paneId, expectedPaneIdentity);
+      if (!resolved) return;
+      const { tab: currentTab, pane: currentPane, paneIndex } = resolved;
       setTabs((prev) => removePaneOp(prev, { tabId, paneId }));
       // 로컬 세션 정리
-      if (pane.sessionId && !pane.hostId) {
-        fetch(`/api/sessions/${pane.sessionId}`, {
+      if (currentPane.sessionId && !currentPane.hostId) {
+        fetch(`/api/sessions/${currentPane.sessionId}`, {
           method: 'DELETE', headers: authHeaders(),
         }).catch(() => {});
       }
       // 호스트 pane → 자신의 원격 tmux 세션도 종료 (의도적 close = 영속 끝).
       // pane 0 도 포함 — 단일 pane 케이스는 이미 closeTab 으로 위임됐으니 여긴 항상 멀티 pane 의
       // 한 pane. 잔류 세션이 안 남게 자기 것은 자기가 죽임.
-      if (pane.hostId) {
-        const host = hosts.find((h) => h.id === pane.hostId);
-        if (host?.use_remote_tmux) {
-          const targetSession = computePaneTmuxSession(host, tab, pane, paneIndex);
-          killRemoteTmuxSession(pane.hostId, targetSession);
+      if (currentPane.hostId && currentPane.mode !== 'vnc') {
+        const host = hosts.find((h) => h.id === currentPane.hostId);
+        const paneMux = currentPane.multiplexer
+          ? normalizeMultiplexer(currentPane.multiplexer)
+          : multiplexerFromHost(host, settings.defaultMultiplexer);
+        if (host && paneMux === TMUX) {
+          const targetSession = computePaneTmuxSession(host, currentTab, currentPane, paneIndex);
+          killRemoteTmuxSession(currentPane.hostId, targetSession);
         }
       }
       // 홈 Resumable 목록 즉시 갱신
       bumpSessionRefresh();
     };
 
-    const plan = planPaneClose(tab, paneId, hosts);
+    const plan = planPaneClose(tab, paneId, hosts, settings.defaultMultiplexer);
     if (plan.action === 'delegateToTab') { closeTabRef.current?.(tabId); return; }
     if (plan.action === 'immediate') { doClose(); return; }
 
@@ -333,7 +345,7 @@ function App() {
       message,
       onConfirm: doClose,
     });
-  }, [tabs, t, hosts, computePaneTmuxSession, killRemoteTmuxSession]);
+  }, [tabs, t, hosts, settings.defaultMultiplexer, computePaneTmuxSession, killRemoteTmuxSession]);
 
   const focusPane = useCallback((tabId, paneId) => {
     setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, activePaneId: paneId } : t));
@@ -365,48 +377,53 @@ function App() {
     const { skipConfirm = false } = opts;
     const tab = tabs.find((t) => t.id === tabId);
     if (!tab) return;
+    const expectedTabIdentity = tabCloseIdentity(tab);
 
-    const removeTabOnly = () => {
-      const idx = tabs.findIndex((t) => t.id === tabId);
-      const remaining = tabs.filter((t) => t.id !== tabId);
-      if (activeTabId === tabId) {
-        const fallback = remaining[Math.max(0, idx - 1)]?.id || remaining[0]?.id || null;
-        setActiveTabId(fallback);
-      }
-      setTabs(remaining);
+    const removeTabOnly = (currentTabs) => {
+      /* Remove from the current array. Replacing it with the snapshot captured before a
+         confirmation modal can resurrect intervening cwd/name changes. */
+      const idx = currentTabs.findIndex((t) => t.id === tabId);
+      if (idx < 0) return;
+      const remaining = currentTabs.filter((t) => t.id !== tabId);
+      setTabs((latestTabs) => latestTabs.filter((t) => t.id !== tabId));
+      setActiveTabId((currentActiveId) => {
+        if (currentActiveId !== tabId) return currentActiveId;
+        return remaining[Math.max(0, idx - 1)]?.id || remaining[0]?.id || null;
+      });
       bumpSessionRefresh();
     };
 
-    const terminateSessions = () => {
-      if (tab.type === 'local') {
-        const sessionIds = (tab.panes || [{ sessionId: tab.sessionId }])
-          .map((p) => p.sessionId)
-          .filter(Boolean);
-        sessionIds.forEach((sid) => {
-          fetch(`/api/sessions/${sid}`, {
-            method: 'DELETE',
-            headers: authHeaders(),
-          }).catch(() => {});
-        });
-      } else if (tab.type === 'host') {
-        const host = hosts.find((h) => h.id === tab.hostId);
-        if (host?.use_remote_tmux) {
-          (tab.panes || [{}]).forEach((pane, idx2) => {
-            const sess = computePaneTmuxSession(host, tab, pane, idx2);
-            killRemoteTmuxSession(tab.hostId, sess);
-          });
-        }
-      }
+    const terminateSessions = (tabToClose) => {
+      /* A merged tab may contain local and remote panes regardless of tab.type. Terminate
+         each pane by its own identity so closing the tab cannot orphan half its sessions. */
+      const targets = collectTabCloseTargets(tabToClose, {
+        hosts,
+        defaultMultiplexer: settings.defaultMultiplexer,
+        computePaneTmuxSession,
+      });
+      targets.localSessionIds.forEach((sessionId) => {
+        fetch(`/api/sessions/${sessionId}`, {
+          method: 'DELETE',
+          headers: authHeaders(),
+        }).catch(() => {});
+      });
+      targets.remoteSessions.forEach(({ hostId, session }) => killRemoteTmuxSession(hostId, session));
     };
 
     // 단순·명료 모델: 탭 닫기 = 그 탭의 내부 세션을 전부 종료한다. detach(세션 유지) 개념 없음.
     // (네트워크 끊김 자동 재연결은 회복력 — Terminal.jsx 가 따로 책임. 여긴 사용자의 명시적 닫기만.)
-    const closeAndTerminate = () => { terminateSessions(); removeTabOnly(); };
+    const closeAndTerminate = () => {
+      const currentTabs = tabsRef.current;
+      const currentTab = resolveConfirmedTab(currentTabs, tabId, expectedTabIdentity);
+      if (!currentTab) return;
+      terminateSessions(currentTab);
+      removeTabOnly(currentTabs);
+    };
 
     // 살아있는 세션이 하나도 없는 빈/신규 탭은 물어볼 게 없다 — 바로 닫는다.
     const hasLiveSession = !!tab.sessionId || !!tab.hostId
       || (tab.panes || []).some((p) => p.sessionId || p.hostId);
-    if (!hasLiveSession) { removeTabOnly(); return; }
+    if (!hasLiveSession) { removeTabOnly(tabsRef.current); return; }
 
     // 휠 클릭 인라인 confirm 등 이미 확인을 거친 빠른 닫기.
     if (skipConfirm) { closeAndTerminate(); return; }
@@ -429,7 +446,7 @@ function App() {
       confirmText: t('closeTab') || 'Close tab',
       onConfirm: closeAndTerminate,
     });
-  }, [tabs, activeTabId, t, hosts, computePaneTmuxSession, killRemoteTmuxSession]);
+  }, [tabs, t, hosts, settings.defaultMultiplexer, computePaneTmuxSession, killRemoteTmuxSession]);
 
   useEffect(() => { closeTabRef.current = closeTab; }, [closeTab]);
 
@@ -457,22 +474,32 @@ function App() {
     const source = isLocalPane ? workspaceRel : absolutePath;
     const trimmed = (source || '').replace(/\/+$/, '');
     const cwdName = trimmed ? trimmed.split('/').pop() : null;
-    if (!cwdName) return; // 루트/홈 등 이름 뽑을 게 없으면 그대로 둔다.
+    /* Store cwd even when it has no basename; an empty string is the valid workspace root.
+       Writing the server-observed path back to the pane also repairs legacy merged tabs. */
+    const nextCwd = isLocalPane ? workspaceRel : absolutePath;
+    const hasCwd = typeof nextCwd === 'string';
+    if (!cwdName && !hasCwd) return;
     setTabs((prev) => prev.map((tb) => {
       const paneIdx = (tb.panes || []).findIndex((p) => p.id === paneId);
       if (paneIdx < 0) return tb;
-      let next = { ...tb };
+      let next = tb;
       // 활성 pane 의 cwd 로 탭 제목 갱신 — 로컬/원격 공통. 사용자가 직접 이름 박은 탭(manualName)은 존중.
-      if (!tb.manualName && tb.activePaneId === paneId && cwdName !== tb.name) {
-        next = { ...next, name: cwdName };
+      if (cwdName && !tb.manualName && tb.activePaneId === paneId && cwdName !== tb.name) {
+        next = { ...tb, name: cwdName };
       }
-      const pane = next.panes[paneIdx];
-      if (!pane.manualName && cwdName !== pane.name) {
+      const pane = tb.panes[paneIdx];
+      const shouldRenamePane = !!cwdName && !pane.manualName && cwdName !== pane.name;
+      const shouldStoreCwd = hasCwd && pane.cwd !== nextCwd;
+      if (shouldRenamePane || shouldStoreCwd) {
         const newPanes = [...next.panes];
-        newPanes[paneIdx] = { ...pane, name: cwdName };
+        newPanes[paneIdx] = {
+          ...pane,
+          ...(shouldRenamePane ? { name: cwdName } : null),
+          ...(shouldStoreCwd ? { cwd: nextCwd } : null),
+        };
         next = { ...next, panes: newPanes };
       }
-      return next === tb ? tb : next;
+      return next;
     }));
   }, []);
 
@@ -544,8 +571,6 @@ function App() {
   // tabId 단위 busy 집합으로 변환. tabs 는 ref 로 잡아 stale closure 방지.
   const [busyTabIds, setBusyTabIds] = useState(() => new Set());
   const [busyPaneIds, setBusyPaneIds] = useState(() => new Set());
-  const tabsRef = useRef(tabs);
-  useEffect(() => { tabsRef.current = tabs; }, [tabs]);
   useEffect(() => {
     let activity = new Map(); // paneId -> ts (ms)
     let tick = null;
@@ -634,6 +659,20 @@ function App() {
     onPick: null,
     slot: null,
   });
+  /* Discard an inline picker when its owner pane disappears. Otherwise the stale slot makes
+     the next global "open at path" request render into a pane that no longer exists. */
+  useEffect(() => {
+    const ownerExists = (slot) => !!slot && tabs.some((tab) => (
+      tab.id === slot.tabId && (tab.panes || []).some((pane) => pane.id === slot.paneId)
+    ));
+    if (localFolderPicker.open && localFolderPicker.slot && !ownerExists(localFolderPicker.slot)) {
+      setLocalFolderPicker({ open: false, launch: false, initial: '', onPick: null, slot: null });
+    }
+    if (folderPickerSlot && !ownerExists(folderPickerSlot)) {
+      setFolderPickerHost(null);
+      setFolderPickerSlot(null);
+    }
+  }, [tabs, localFolderPicker.open, localFolderPicker.slot, folderPickerSlot]);
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null });
   const [notification, setNotification] = useState({ isOpen: false, message: '' });
   const [vncPickerHost, setVncPickerHost] = useState(null);
@@ -922,19 +961,14 @@ function App() {
                       if (hostId) {
                         const host = hosts.find((h) => h.id === hostId);
                         if (host) { openHostTab(host, path); return; }
-                      }
-                      const sessionId = generateUUID();
-                      const tabId = `local:${sessionId}`;
-                      const name = path.split('/').pop() || (settings.localName || 'terminal');
-                      setTabs((prev) => {
-                        const newTab = makLocalTab(sessionId, name, path, {
-                          icon: settings.localIcon || null,
-                          colorIndex: settings.localColorIndex ?? 0,
-                          themeOverride: resolveProfileTheme(settings.localTheme, usedThemeIdsFromTabs(prev)),
+                        setNotification({
+                          isOpen: true,
+                          type: 'error',
+                          message: t('hostNotFound') || '호스트를 찾을 수 없어 터미널을 열지 못했습니다.',
                         });
-                        return [...prev, newTab];
-                      });
-                      setActiveTabId(tabId);
+                        return;
+                      }
+                      openLocalTab(path ?? '');
                     });
   const handleScreenDump = useEvent((text) => setScreenDumpText(text || '— empty —'));
   const handleConfirm = useEvent((opts) => setConfirmModal({ isOpen: true, ...opts }));
@@ -1254,7 +1288,7 @@ function App() {
                  로컬은 SSH 없이 한 번이면 알 수 있으므로 자동 감지한다. */
               showLocalVnc={localVncAvailable}
               refreshHosts={refreshHosts}
-              onOpenHostAtPath={(h) => setFolderPickerHost(h)}
+              onOpenHostAtPath={(h) => handlePickHostPath(h, null)}
               onEditLocal={() => setLocalEditorOpen(true)}
               onPickLocalPath={() => setLocalFolderPicker({
                 open: true,
@@ -1567,33 +1601,9 @@ function App() {
            열기"). 셸 칸은 그리지 않는다 — 원격 WS 는 `shell` 을 안 싣는다. */
         launchOptions
         defaultMultiplexer={settings.defaultMultiplexer}
-        onClose={() => { setFolderPickerHost(null); setFolderPickerSlot(null); }}
-        onPick={async (chosen, launch) => {
-          const host = folderPickerHost;
-          const slot = folderPickerSlot;
-          setFolderPickerHost(null);
-          setFolderPickerSlot(null);
-          if (!host || !chosen) return;
-          try {
-            await fetch(`/api/hosts/${host.id}/last-cwd`, {
-              method: 'POST',
-              headers: authHeaders({ 'Content-Type': 'application/json' }),
-              body: JSON.stringify({ cwd: chosen }),
-            });
-          } catch {
-            // 무시 — 갱신 실패해도 cwd 는 WS 로 직접 전달
-          }
-          if (slot?.tabId && slot?.paneId) {
-            // split 한 빈 pane 채우기 — 새 탭 X.
-            activatePane(slot.tabId, slot.paneId, {
-              type: 'host', hostId: host.id, cwd: chosen, launch: cleanLaunch(launch),
-            });
-          } else {
-            // 홈 대시보드 케이스 — 새 탭으로 열기.
-            openHostTab(host, chosen, null, launch);
-          }
-          refreshHosts();
-        }}
+        defaultShell={settings.defaultShell}
+        onClose={handleRemotePickerClose}
+        onPick={handleRemotePickerPick}
         t={t}
       />
 
@@ -1634,12 +1644,8 @@ function App() {
         launchOptions={!!localFolderPicker.launch}
         defaultMultiplexer={settings.defaultMultiplexer}
         defaultShell={settings.defaultShell}
-        onClose={() => setLocalFolderPicker({ open: false, initial: '', onPick: null, slot: null })}
-        onPick={(chosen, launch) => {
-          const fn = localFolderPicker.onPick;
-          setLocalFolderPicker({ open: false, initial: '', onPick: null, slot: null });
-          fn?.(chosen, launch);
-        }}
+        onClose={handleLocalPickerClose}
+        onPick={handleLocalPickerPick}
         t={t}
       />
 
