@@ -3,6 +3,7 @@ import { authHeaders } from '../utils/auth';
 import { apiFetch } from '../utils/apiFetch';
 import { createHostCwdBatcher } from '../utils/hostCwdBatch';
 import { subscribeAgentStatus, getAgentCwd } from '../utils/agentStatusStore';
+import { subscribeRemoteCwd, getRemoteCwd } from '../utils/remoteCwdStore';
 
 const fetchHostCwds = async (hostId) => {
   const res = await apiFetch(`/api/hosts/${hostId}/cwd/batch`, { headers: authHeaders() });
@@ -35,8 +36,8 @@ const { request: requestLocalCwd } = createHostCwdBatcher({ fetchCwds: fetchLoca
  * 할 수 있어서다 — 상대 경로 계산을 여기 베끼면 두 곳이 반드시 어긋난다.
  * 그래서 `cd` 한 번당 배치된 요청 하나. 사람 속도로 일어나는 일이라 무시할 수 있다.
  *
- * ⚠️ 이 신호는 **로컬 tmux pane 에만** 온다. 원격 pane 의 tmux 는 그 호스트에 있다 —
- * 그쪽은 예전처럼 명시적 refresh 로만 갱신된다.
+ * Remote tmux panes reuse the existing per-host outbox sweep as their signal.
+ * No SSH connection or polling loop is added; only changed session paths cross SSE.
  *
  * deferMs: delays the first lookup, for off-screen panes. A restored workspace
  * mounts every pane at once, so these lookups (a per-pane SSH round trip when
@@ -60,7 +61,9 @@ const useActiveTerminalCwd = ({
   refreshSignal = 0,
   deferMs = 0,
 }) => {
-  const [workspaceRelative, setWorkspaceRelative] = useState('');
+  /* null means "not known yet/outside the workspace"; '' is the confirmed workspace root.
+     Conflating them lets the first render overwrite a freshly selected pane cwd with root. */
+  const [workspaceRelative, setWorkspaceRelative] = useState(null);
   const [absolutePath, setAbsolutePath] = useState(null);
   /* deferMs is read through a ref on purpose: it flips whenever the pane's
      visibility does, and as an effect dependency that meant *leaving* a tab
@@ -72,17 +75,21 @@ const useActiveTerminalCwd = ({
   const tickRef = useRef(null);
   const retryRef = useRef(null);
   const retryAttemptRef = useRef(0);
+  const lastLiveRef = useRef('');
+  const identity = `${isLocal ? 'local' : 'remote'}\u0000${sessionId || ''}\u0000${hostId || ''}\u0000${tmuxSession || ''}`;
+  const identityRef = useRef(identity);
+  identityRef.current = identity;
 
   const clearRetry = useCallback(() => {
     if (retryRef.current) { clearTimeout(retryRef.current); retryRef.current = null; }
   }, []);
 
-  const fetchLocal = useCallback(async (id) => {
+  const fetchLocal = useCallback(async (id, expectedIdentity) => {
     try {
       // Local panes share one request too — see utils/hostCwdBatch. '' is the
       // key for "this machine": one tmux server, one batch.
       const data = await requestLocalCwd('', id);
-      if (!data) return null;
+      if (!data || identityRef.current !== expectedIdentity) return null;
       if (data.in_workspace) {
         setWorkspaceRelative(data.workspace_relative || '');
       } else {
@@ -93,13 +100,19 @@ const useActiveTerminalCwd = ({
     } catch { return null; }
   }, []);
 
-  const fetchRemote = useCallback(async (id, session) => {
+  const fetchRemote = useCallback(async (id, session, expectedIdentity) => {
     try {
       /* Panes on one host share a single request (utils/hostCwdBatch) — see the
          note there. Without a session name there is nothing to look up in the
          per-session map, so that case keeps the single-shot endpoint. */
       if (session) {
-        const cwd = await requestHostCwd(id, session);
+        const liveBefore = getRemoteCwd(id, session);
+        const fetchedCwd = await requestHostCwd(id, session);
+        const liveAfter = getRemoteCwd(id, session);
+        if (identityRef.current !== expectedIdentity) return null;
+        // An SSE change arriving during this request is newer than its response.
+        // An unchanged cached value is not: a manual refresh may have fresher data.
+        const cwd = liveAfter && liveAfter !== liveBefore ? liveAfter : fetchedCwd;
         if (cwd == null) return null;
         setAbsolutePath(cwd);
         setWorkspaceRelative(null);
@@ -108,6 +121,7 @@ const useActiveTerminalCwd = ({
       const res = await apiFetch(`/api/hosts/${id}/cwd`, { headers: authHeaders() });
       if (!res.ok) return null;
       const data = await res.json();
+      if (identityRef.current !== expectedIdentity) return null;
       setAbsolutePath(data.cwd || null);
       setWorkspaceRelative(null);
       return data;
@@ -133,6 +147,7 @@ const useActiveTerminalCwd = ({
   }, [clearRetry]);
 
   const refresh = useCallback(() => {
+    const expectedIdentity = identity;
     if (isLocal) {
       if (!sessionId) {
         clearRetry();
@@ -141,9 +156,10 @@ const useActiveTerminalCwd = ({
         setAbsolutePath(null);
         return Promise.resolve(null);
       }
-      const p = fetchLocal(sessionId);
+      const p = fetchLocal(sessionId, expectedIdentity);
       p.then((data) => {
-        if (!data || !data.cwd) scheduleRetry(() => fetchLocal(sessionId));
+        if (identityRef.current !== expectedIdentity) return;
+        if (!data || !data.cwd) scheduleRetry(() => fetchLocal(sessionId, expectedIdentity));
         else { clearRetry(); retryAttemptRef.current = 0; }
       });
       return p;
@@ -154,30 +170,47 @@ const useActiveTerminalCwd = ({
       setAbsolutePath(null);
       return Promise.resolve(null);
     }
-    const p = fetchRemote(hostId, tmuxSession);
+    const p = fetchRemote(hostId, tmuxSession, expectedIdentity);
     p.then((data) => {
-      if (!data || !data.cwd) scheduleRetry(() => fetchRemote(hostId, tmuxSession));
+      if (identityRef.current !== expectedIdentity) return;
+      if (!data || !data.cwd) scheduleRetry(() => fetchRemote(hostId, tmuxSession, expectedIdentity));
       else { clearRetry(); retryAttemptRef.current = 0; }
     });
     return p;
-  }, [isLocal, sessionId, hostId, tmuxSession, fetchLocal, fetchRemote, scheduleRetry, clearRetry]);
+  }, [identity, isLocal, sessionId, hostId, tmuxSession, fetchLocal, fetchRemote, scheduleRetry, clearRetry]);
 
   /* 이 세션의 살아있는 cwd(문자열). ⚠️ 원시값이어야 한다 — 객체를 만들어 돌려주면
      `useSyncExternalStore` 가 매 렌더를 변경으로 읽어 무한 루프가 된다. */
   const liveCwd = useSyncExternalStore(
-    subscribeAgentStatus,
-    () => (isLocal ? getAgentCwd(sessionId) : ''),
+    isLocal ? subscribeAgentStatus : subscribeRemoteCwd,
+    () => (isLocal ? getAgentCwd(sessionId) : getRemoteCwd(hostId, tmuxSession)),
     () => '',
   );
   /* 그 값이 우리가 아는 것과 달라진 순간에만 다시 묻는다. 같은 값이 또 와도(스냅샷
      하이드레이션 등) 아무 일도 하지 않는다. */
-  const lastLiveRef = useRef('');
+  useEffect(() => {
+    clearRetry();
+    retryAttemptRef.current = 0;
+    lastLiveRef.current = '';
+    setWorkspaceRelative(null);
+    setAbsolutePath(null);
+  }, [identity, clearRetry]);
+
   useEffect(() => {
     if (!liveCwd || liveCwd === lastLiveRef.current) return;
     lastLiveRef.current = liveCwd;
     if (absolutePath && liveCwd === absolutePath) return;   // 이미 그 경로를 알고 있다
+    if (!isLocal) {
+      // Remote paths are already absolute, so unlike local paths they need no
+      // workspace-relative normalization request back to the server.
+      clearRetry();
+      retryAttemptRef.current = 0;
+      setWorkspaceRelative(null);
+      setAbsolutePath(liveCwd);
+      return;
+    }
     refresh();
-  }, [liveCwd, absolutePath, refresh]);
+  }, [liveCwd, absolutePath, isLocal, refresh, clearRetry]);
 
   // 기본은 1회성 조회 + 실패 시 백오프. intervalMs 를 명시한 경우에만 하위호환 폴링.
   useEffect(() => {

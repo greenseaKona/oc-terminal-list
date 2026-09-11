@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import useActiveTerminalCwd from './useActiveTerminalCwd';
+import { _resetRemoteCwd, applyRemoteCwdChanges } from '../utils/remoteCwdStore';
 
 /* Local cwd goes through the shared batcher (utils/hostCwdBatch), so the mocked
    response is the batch shape and every assertion has to advance past the batch
@@ -10,13 +11,16 @@ const BATCH_WINDOW_MS = 60;
 const batchOf = (map) => ({ ok: true, json: async () => ({ cwds: map }) });
 
 describe('useActiveTerminalCwd', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  beforeEach(() => { vi.useFakeTimers(); _resetRemoteCwd(); });
   afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
   it('cwd 를 끝내 못 받아도 재시도 사다리는 끝이 있다', async () => {
     // 예전엔 30s 캡에서 영원히 돌았다 — pane 하나가 분당 2회(원격이면 SSH 왕복)를 영구히 태웠다.
     global.fetch = vi.fn(async () => batchOf({}));
-    renderHook(() => useActiveTerminalCwd({ sessionId: 's1', isLocal: true }));
+    const { result } = renderHook(() => useActiveTerminalCwd({ sessionId: 's1', isLocal: true }));
+
+    // Unknown before the first response is not the confirmed workspace root ('').
+    expect(result.current.workspaceRelative).toBeNull();
 
     await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60 * 1000); });
 
@@ -100,5 +104,62 @@ describe('useActiveTerminalCwd', () => {
     rerender({ d: 0, sig: 'v1' });   // 다시 보임
     await act(async () => { await vi.advanceTimersByTimeAsync(BATCH_WINDOW_MS); });
     expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('원격 tmux cwd SSE는 추가 fetch 없이 즉시 적용한다', async () => {
+    global.fetch = vi.fn(async () => batchOf({ mobile: '/srv/old' }));
+    const { result } = renderHook(() => useActiveTerminalCwd({
+      hostId: 'h1', tmuxSession: 'mobile', isLocal: false,
+    }));
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(BATCH_WINDOW_MS); });
+    expect(result.current.absolutePath).toBe('/srv/old');
+
+    act(() => applyRemoteCwdChanges('h1', { mobile: '/srv/new' }));
+
+    expect(result.current.absolutePath).toBe('/srv/new');
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('요청 중 도착한 SSE cwd를 늦은 응답으로 되돌리지 않는다', async () => {
+    let finishFetch;
+    global.fetch = vi.fn(() => new Promise((resolve) => {
+      finishFetch = () => resolve(batchOf({ mobile: '/srv/old' }));
+    }));
+    const { result } = renderHook(() => useActiveTerminalCwd({
+      hostId: 'h1', tmuxSession: 'mobile', isLocal: false,
+    }));
+
+    act(() => { vi.advanceTimersByTime(BATCH_WINDOW_MS); });
+    act(() => applyRemoteCwdChanges('h1', { mobile: '/srv/new' }));
+    await act(async () => { finishFetch(); await Promise.resolve(); });
+
+    expect(result.current.absolutePath).toBe('/srv/new');
+  });
+
+  it('pane identity가 바뀌면 즉시 초기화하고 이전 요청 결과를 버린다', async () => {
+    let finishOldFetch;
+    global.fetch = vi.fn((url) => {
+      if (String(url).includes('ids=old')) {
+        return new Promise((resolve) => {
+          finishOldFetch = () => resolve(batchOf({ old: { cwd: '/old', in_workspace: false } }));
+        });
+      }
+      return Promise.resolve(batchOf({ next: { cwd: '/next', in_workspace: false } }));
+    });
+    const { result, rerender } = renderHook(
+      ({ sessionId }) => useActiveTerminalCwd({ sessionId, isLocal: true }),
+      { initialProps: { sessionId: 'old' } },
+    );
+
+    act(() => { vi.advanceTimersByTime(BATCH_WINDOW_MS); });
+    rerender({ sessionId: 'next' });
+    expect(result.current.absolutePath).toBeNull();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(BATCH_WINDOW_MS); });
+    expect(result.current.absolutePath).toBe('/next');
+
+    await act(async () => { finishOldFetch(); await Promise.resolve(); });
+    expect(result.current.absolutePath).toBe('/next');
   });
 });
