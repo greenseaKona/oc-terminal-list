@@ -3,6 +3,7 @@ import { migrateTab, makLocalTab } from '../utils/tabModel';
 import { areTabsEquivalent, tabsFingerprint, pickFallbackTabId } from '../utils/tabStateSync';
 import { authHeaders } from '../utils/auth';
 import { applyAgentStatusChanges, hydrateAgentStatus } from '../utils/agentStatusStore';
+import { applyRemoteCwdChanges } from '../utils/remoteCwdStore';
 import { openEventStream } from '../utils/eventStream';
 import { apiFetch } from '../utils/apiFetch';
 
@@ -237,7 +238,6 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
     const MAX_DELAY = 30000;
 
     const applyIfChanged = async (updatedAt) => {
-      console.log('DBG applyIfChanged', updatedAt, lastAppliedTabVersionRef.current, localDirtyRef.current);
       if (!updatedAt || updatedAt === lastAppliedTabVersionRef.current) return;
       if (localDirtyRef.current) return;
       try {
@@ -294,6 +294,10 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
               // 불변식이 깨져 재연결 폭주가 재발한다(위 CRITICAL 주석 참고).
               if (payload.type === 'agentStatus') {
                 applyAgentStatusChanges(payload.changes);
+                return;
+              }
+              if (payload.type === 'remoteCwd') {
+                applyRemoteCwdChanges(payload.hostId, payload.cwds);
                 return;
               }
               applyIfChanged(payload.updatedAt);

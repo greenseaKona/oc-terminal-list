@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import useWorkspaceTabs from './useWorkspaceTabs';
+import { _resetRemoteCwd, getRemoteCwd } from '../utils/remoteCwdStore';
 
 /**
  * 회귀 방지 대상 — 기기 두 대(PC + 폰)를 동시에 열어두면 tab-state 가 서로를 되받아치며
@@ -42,6 +43,7 @@ describe('useWorkspaceTabs 서버 동기화', () => {
   beforeEach(() => {
     localStorage.clear();
     sseInstances.length = 0;
+    _resetRemoteCwd();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     global.EventSource = FakeEventSource;
   });
@@ -128,6 +130,19 @@ describe('useWorkspaceTabs 서버 동기화', () => {
     await act(async () => { sseInstances[0].emit({ updatedAt: 'remote-2' }); });
     await flushSave();
     expect(calls.put).toHaveLength(0);
+  });
+
+  it('같은 SSE 연결의 원격 cwd 변경분을 전용 스토어에 적용한다', async () => {
+    setupFetch({ tabs: [tab('a')], activeTabId: 'a', updatedAt: 'v0' });
+    const { result } = renderHook(() => useWorkspaceTabs({ isAuthenticated: true }));
+    await waitFor(() => expect(result.current.isRestoringWorkspace).toBe(false));
+    await waitFor(() => expect(sseInstances).toHaveLength(1));
+
+    act(() => sseInstances[0].emit({
+      type: 'remoteCwd', hostId: 'h1', cwds: { mobile: '/srv/app' },
+    }));
+
+    expect(getRemoteCwd('h1', 'mobile')).toBe('/srv/app');
   });
 
   it('보던 탭이 사라지면 첫 탭이 아니라 그 자리 이웃으로 간다', async () => {
