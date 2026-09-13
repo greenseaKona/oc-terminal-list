@@ -42,7 +42,7 @@ describe('MobileToolbar quick input', () => {
     expect(onOpen).toHaveBeenCalled();
   });
 
-  it('작은 화면에서도 32px 터치 영역과 우측 overflow 힌트를 제공한다', () => {
+  it('작은 화면에서도 24px 키와 우측 overflow 힌트를 제공한다', () => {
     const { container } = render(
       <MobileToolbar
         language="en"
@@ -51,7 +51,7 @@ describe('MobileToolbar quick input', () => {
     );
 
     const key = screen.getByText('ESC').closest('button');
-    expect(key.style.height).toBe('32px');
+    expect(key.style.height).toBe('24px');
     expect(container.querySelector('style').textContent).toContain('mask-image: linear-gradient');
   });
 });
