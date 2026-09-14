@@ -15,7 +15,6 @@ import useActiveTerminalCwd from '../../hooks/useActiveTerminalCwd';
 import { killPaneSession } from '../../utils/restartSession';
 import EmptyPane from './EmptyPane';
 import { collectOtherPaneSessions } from '../../utils/paneSessions';
-import PaneAddressLabel from './PaneAddressLabel';
 import useAppConfig from '../../hooks/useAppConfig';
 import { copyToClipboard } from '../../utils/clipboard';
 import { buildItlHandle, itlHandleLabel } from '../../utils/itlHandle';
@@ -90,11 +89,12 @@ const Pane = ({
 
   /* 이 pane 의 주소(`탭.pane`). "옆에 2번한테 시켜" 라고 말하려면 자기 주소를 자기가
      볼 수 있어야 한다 — 하단 tmux 상태바의 `[1.2]` 와 같은 값이고 같은 이유다. */
-  const tabNumber = (() => {
+  const tabNumber = tab?.addressNumber ?? (() => {
     const tabIndex = allTabs.findIndex((tt) => tt.id === tab?.id);
     return tabIndex >= 0 ? tabIndex + 1 : null;
   })();
-  const paneAddress = tabNumber != null ? `${tabNumber}.${paneIndex + 1}` : null;
+  const paneNumber = pane?.addressNumber ?? paneIndex + 1;
+  const paneAddress = tabNumber != null ? `${tabNumber}.${paneNumber}` : null;
 
   /* Eye 히스토리 popover 의 세션 픽커에 실릴 "다른 살아있는 세션" 목록.
      여기(allTabs/hosts/settings/t 가 있는 곳)에서 계산해 TerminalHeader 로 넘긴다.
@@ -775,16 +775,6 @@ const Pane = ({
                 boxShadow: 'inset 0 0 0 1px rgba(245,158,11,0.15)',
               }} />
             )}
-            {/* Keep the floating address desktop-only; mobile renders it in the rail. */}
-            <PaneAddressLabel
-              hidden={isMobile}
-              paneNumber={paneIndex + 1}
-              tabNumber={tabNumber}
-              fullAddress={paneAddress}
-              isProminent={isFocused || hover}
-              onCopy={itlAvailable && paneAddress ? handleCopyPaneTarget : null}
-              copyLabel={t?.('copyPaneTarget') || "Copy itl handle (itl send 1.2 'TEXT')"}
-            />
             {isBroadcasting && onToggleBroadcastExclude && (
               <BroadcastBadge
                 isExcluded={isBroadcastExcluded}

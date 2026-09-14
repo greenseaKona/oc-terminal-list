@@ -640,7 +640,7 @@ export const ko = {
     privateKey: '개인 키',
     refreshTerminal: '터미널 새로고침',
     refreshTerminalHint: '화면만 다시 그립니다',
-    duplicateTab: '같은 경로로 새 탭',
+    duplicateTab: '같은 경로로 분할',
     mirrorOpenTab: '열린 탭을 여기로 옮기기',
     moveLeft: '왼쪽으로 이동',
     moveRight: '오른쪽으로 이동',

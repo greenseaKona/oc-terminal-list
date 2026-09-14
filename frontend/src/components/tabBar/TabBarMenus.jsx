@@ -81,7 +81,7 @@ export const TabContextMenu = ({
       )}
       {onDuplicateTab && (
         <MenuItem onClick={onDuplicateTab} icon={Copy}>
-          {t?.('duplicateTab') || 'Duplicate (same path)'}
+          {t?.('duplicateTab') || 'Split here'}
         </MenuItem>
       )}
       {canSplit && onSplit && (
@@ -176,4 +176,3 @@ export const SettingsSubMenu = ({ anchor, t, isMobile = false, onClose, onSettin
     </div>
   );
 };
-

@@ -282,15 +282,15 @@ describe('TerminalHeader', () => {
     });
   });
 
-  describe('mobile pane address chip', () => {
+  describe('pane address chip', () => {
     it('shows the pane address in the rail on mobile', () => {
       render(<TerminalHeader {...baseProps({ isMobile: true, paneAddress: '2.3' })} />);
       expect(screen.getByText('2.3')).toBeTruthy();
     });
 
-    it('omits the chip on desktop — the floating badge owns the address there', () => {
+    it('shows the same rail chip on desktop', () => {
       render(<TerminalHeader {...baseProps({ paneAddress: '2.3' })} />);
-      expect(screen.queryByText('2.3')).toBeNull();
+      expect(screen.getByText('2.3')).toBeTruthy();
     });
 
     it('omits the chip when the pane has no address', () => {
@@ -303,6 +303,12 @@ describe('TerminalHeader', () => {
       render(<TerminalHeader {...baseProps({ isMobile: true, paneAddress: '2.3', onCopyAddress })} />);
       fireEvent.click(screen.getByText('2.3'));
       expect(onCopyAddress).toHaveBeenCalledTimes(1);
+    });
+
+    it('exposes an action label and a 28px rail hit target', () => {
+      render(<TerminalHeader {...baseProps({ paneAddress: '2.3', onCopyAddress: vi.fn() })} />);
+      const button = screen.getByRole('button', { name: /2\.3/ });
+      expect(button.style.height).toBe('28px');
     });
 
     it('renders a passive span when itl is unavailable', () => {

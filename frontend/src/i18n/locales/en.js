@@ -637,7 +637,7 @@ export const en = {
     privateKey: 'Private key',
     refreshTerminal: 'Reload terminal',
     refreshTerminalHint: 'Redraws the screen',
-    duplicateTab: 'New tab here',
+    duplicateTab: 'Split here',
     mirrorOpenTab: 'Move an open tab here',
     moveLeft: 'Move left',
     moveRight: 'Move right',

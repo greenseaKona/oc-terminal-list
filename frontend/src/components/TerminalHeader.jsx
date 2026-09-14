@@ -449,7 +449,7 @@ const TerminalHeader = ({
           display: 'flex', flexDirection: 'row', alignItems: 'center',
           gap: '1px', flexShrink: 0,
         }}>
-            {isMobile && paneAddress && (() => {
+            {paneAddress && (() => {
               const chipStyle = {
                 flexShrink: 0,
                 display: 'inline-flex', alignItems: 'center',
@@ -467,9 +467,15 @@ const TerminalHeader = ({
                   type="button"
                   onClick={onCopyAddress}
                   title={t?.('copyPaneTarget') || "Copy itl handle (itl send 1.2 'TEXT')"}
-                  style={{ ...chipStyle, cursor: 'pointer' }}
+                  aria-label={`${t?.('copyPaneTarget') || 'Copy pane address'} · ${paneAddress}`}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    height: '28px', padding: 0, marginRight: '3px', flexShrink: 0,
+                    background: 'transparent', border: 'none', cursor: 'pointer',
+                    WebkitTapHighlightColor: 'transparent',
+                  }}
                 >
-                  {paneAddress}
+                  <span style={{ ...chipStyle, marginRight: 0 }}>{paneAddress}</span>
                 </button>
               ) : (
                 <span aria-hidden="true" style={{ ...chipStyle, pointerEvents: 'none' }}>
