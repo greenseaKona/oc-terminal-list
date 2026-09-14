@@ -39,7 +39,7 @@ import {
   makeLeaf, treeFromLegacyLayout, splitLeaf, removeLeaf, ensureTree,
   swapLeaves,
 } from './utils/splitTree';
-import { appendPaneAsSplit } from './utils/tabPaneOpen';
+import { appendPaneAsSplit, appendPaneToTab } from './utils/tabPaneOpen';
 // 탭/pane 상태 전이 순수 리듀서 — 로직은 utils/tabOperations.js 가 소유(테스트 있음).
 import {
   splitPaneOp, dropTabToSplitPaneOp, activatePaneOp, reorderPaneOp, dropPaneToSplitOp,
@@ -48,7 +48,7 @@ import {
 import {
   makePane, makLocalTab, makeFreshHostTmuxSessionName,
   usedThemeIdsFromTabs, resolveProfileTheme, makeHostTab, makeVncTab,
-  deriveTabMeta,
+  deriveTabMeta, getActivePane, resolvePaneLaunchSource,
 } from './utils/tabModel';
 
 import TabBar from './components/TabBar';
@@ -931,6 +931,32 @@ function App() {
   const handleClosePaneImmediate = useEvent((tabId, paneId) => closePane(tabId, paneId, { skipConfirm: true }));
   const handleSplitPane = useEvent((tabId, paneId, dir) => splitActivePane(dir, tabId, paneId));
   const handleDropTabToPane = useEvent((sourceTabId, targetTabId, targetPaneId, dir) => dropTabToSplitPane(sourceTabId, targetTabId, targetPaneId, dir));
+  const handleDuplicateTab = useEvent((tabId) => {
+    const source = tabs.find((tab) => tab.id === tabId);
+    if (!source) return;
+
+    const sourcePane = getActivePane(source);
+    if (!sourcePane) return;
+    const { hostId: sourceHostId, cwd: sourceCwd } = resolvePaneLaunchSource(source, sourcePane);
+    const host = sourceHostId ? hosts.find((candidate) => candidate.id === sourceHostId) : null;
+    if (sourceHostId && !host) return;
+
+    setTabs((prev) => {
+      const pane = makePane({
+        ...(host
+          ? { hostId: host.id, tmuxSessionName: makeFreshHostTmuxSessionName(host) }
+          : { sessionId: generateUUID() }),
+        ...(sourceCwd != null ? { cwd: sourceCwd } : null),
+        ...(() => {
+          const profileTheme = host ? host.theme : settings.localTheme;
+          const resolvedTheme = resolveProfileTheme(profileTheme, usedThemeIdsFromTabs(prev));
+          return resolvedTheme ? { themeOverride: resolvedTheme } : {};
+        })(),
+      });
+      return appendPaneToTab(prev, tabId, pane, { afterPaneId: sourcePane.id, dir: 'right' });
+    });
+    setActiveTabId(tabId);
+  });
   const handleOpenTerminalAtFolder = useEvent((path, hostId = null, source = null) => {
                       if (isMobile && source?.tabId) {
                         const paneId = generateUUID();
@@ -1229,18 +1255,7 @@ function App() {
         }
         onLogout={handleLogoutRequest}
         onSplit={splitActivePane}
-        onDuplicate={(tabId) => {
-          const src = tabs.find((tt) => tt.id === tabId);
-          if (!src) return;
-          if (src.type === 'host') {
-            const h = hosts.find((hh) => hh.id === src.hostId);
-            if (h) openHostTab(h, src.cwd ?? null);
-          } else {
-            // src.cwd 가 비어 있으면 탭의 활성 pane cwd 를 추적해 재현. 단순화 — tab.cwd 우선,
-            // 없으면 settings.localStartPath 폴백 (openLocalTab 의 기본 동작).
-            openLocalTab(src.cwd ?? null);
-          }
-        }}
+        onDuplicate={handleDuplicateTab}
         onRenameTab={handleRenameTab}
         canSplit={!!activeTab && !isMobile}
         t={t}

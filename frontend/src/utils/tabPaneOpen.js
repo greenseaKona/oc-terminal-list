@@ -21,3 +21,7 @@ export const appendPaneAsSplit = (tab, newPane, { afterPaneId = null, dir = 'rig
     activePaneId: newPane.id,
   };
 };
+
+export const appendPaneToTab = (tabs, tabId, newPane, options = {}) => (
+  tabs.map((tab) => (tab.id === tabId ? appendPaneAsSplit(tab, newPane, options) : tab))
+);
