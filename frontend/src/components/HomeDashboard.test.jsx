@@ -2,10 +2,21 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import HomeDashboard from './HomeDashboard';
 
+const fleetState = vi.hoisted(() => ({
+  targets: [], machines: [], loading: false, error: null, refresh: vi.fn(),
+}));
+vi.mock('../hooks/useFleet', () => ({ default: () => fleetState }));
+
 import { locales } from '../i18n/locales';
 const mockT = (key, fallback) => locales.en[key] || fallback || key;
 
 describe('HomeDashboard', () => {
+  afterEach(() => {
+    fleetState.targets = [];
+    fleetState.machines = [];
+    fleetState.refresh.mockClear();
+  });
+
   it('renders empty state with This machine + add-slot fillers', () => {
     render(
       <HomeDashboard
@@ -79,6 +90,30 @@ describe('HomeDashboard', () => {
     expect(addButtons).toHaveLength(1);
     fireEvent.click(addButtons[0]);
     expect(onAddHost).toHaveBeenCalled();
+  });
+
+  it('opens a Fleet pane by its stable tab address', () => {
+    const onJumpPane = vi.fn();
+    fleetState.targets = [{
+      addr: '12.1', tabIndex: 12, paneIndex: 1, paneId: 'pane-12', status: 'idle',
+    }];
+
+    render(
+      <HomeDashboard
+        hosts={[]}
+        tabs={[
+          { id: 'tab-1', addressNumber: 1 },
+          { id: 'tab-12', addressNumber: 12 },
+        ]}
+        onJumpPane={onJumpPane}
+        t={mockT}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Running' }));
+    fireEvent.click(screen.getByText('12.1'));
+
+    expect(onJumpPane).toHaveBeenCalledWith('tab-12', 'pane-12');
   });
 });
 

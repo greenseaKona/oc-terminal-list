@@ -430,7 +430,7 @@ function App() {
 
     const paneCount = tab.panes?.length || 1;
     const tabIdx = tabs.findIndex((tb) => tb.id === tabId);
-    const tabNo = tabIdx >= 0 ? tabIdx + 1 : '?';
+    const tabNo = tab.addressNumber ?? (tabIdx >= 0 ? tabIdx + 1 : '?');
     const headerLine = `#${tabNo} · ${tab.name || 'terminal'}`;
     // "닫기 = 세션 종료" 를 문구로 못 박는다. pane 여러 개면 몇 개가 끝나는지 명시.
     // t() 는 보간이 없어 pre + 숫자 + post 로 조립(언어별 어순 유지).

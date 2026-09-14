@@ -103,7 +103,10 @@ const HomeDashboard = ({
   /* The board addresses panes the way the rest of the app does (tab.pane, 1-based); jumping needs
      the real ids, and this component is the one holding the tab list. */
   const handleFleetOpen = (target) => {
-    const tab = tabs[(target?.tabIndex || 0) - 1];
+    const tab = tabs.find((candidate) => candidate.addressNumber === target?.tabIndex)
+      || (tabs.every((candidate) => candidate.addressNumber == null)
+        ? tabs[(target?.tabIndex || 0) - 1]
+        : null);
     if (!tab) return;
     if (target.paneId && onJumpPane) onJumpPane(tab.id, target.paneId);
     else onJumpTab?.(tab.id);
