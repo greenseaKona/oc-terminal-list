@@ -9,6 +9,7 @@ import {
   paneIdentityKey,
   resolvePaneLaunchSource,
   stabilizeTabAddresses,
+  stabilizeWorkspaceTabAddresses,
 } from './tabModel';
 
 const HOSTS = [
@@ -78,7 +79,7 @@ describe('resolvePaneLaunchSource', () => {
 });
 
 describe('stabilizeTabAddresses', () => {
-  it('preserves assigned numbers and fills the lowest free numbers', () => {
+  it('preserves assigned tab numbers and appends after the legacy high-water mark', () => {
     const tabs = stabilizeTabAddresses([
       { id: 't3', addressNumber: 3, panes: [
         { id: 'p3', addressNumber: 3 },
@@ -88,9 +89,34 @@ describe('stabilizeTabAddresses', () => {
       { id: 't1', addressNumber: 1, panes: [{ id: 'p1', addressNumber: 1 }] },
     ]);
 
-    expect(tabs.map((item) => item.addressNumber)).toEqual([3, 2, 1]);
+    expect(tabs.map((item) => item.addressNumber)).toEqual([3, 4, 1]);
     expect(tabs[0].panes.map((item) => item.addressNumber)).toEqual([3, 1]);
     expect(tabs[1].panes[0].addressNumber).toBe(1);
+  });
+
+  it('does not reuse a closed tab address when allocating a new tab', () => {
+    const initial = stabilizeWorkspaceTabAddresses([
+      { id: 't1', addressNumber: 1, panes: [] },
+      { id: 't8', addressNumber: 8, panes: [] },
+    ], 9);
+    const closed = initial.tabs.filter((tab) => tab.id !== 't8');
+
+    const next = stabilizeWorkspaceTabAddresses([
+      ...closed,
+      { id: 'new', panes: [] },
+    ], initial.nextTabAddressNumber);
+
+    expect(next.tabs.map((tab) => tab.addressNumber)).toEqual([1, 9]);
+    expect(next.nextTabAddressNumber).toBe(10);
+  });
+
+  it('derives the next address above every legacy tab number', () => {
+    const restored = stabilizeWorkspaceTabAddresses([
+      { id: 't2', addressNumber: 2, panes: [] },
+      { id: 't7', addressNumber: 7, panes: [] },
+    ]);
+
+    expect(restored.nextTabAddressNumber).toBe(8);
   });
 
   it('keeps object identity when every address is already stable', () => {

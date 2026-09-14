@@ -275,17 +275,41 @@ const assignStableNumbers = (items) => {
   return changed ? next : items;
 };
 
-export const stabilizeTabAddresses = (tabs) => {
-  const numberedTabs = assignStableNumbers(tabs);
-  let changed = numberedTabs !== tabs;
+export const stabilizeWorkspaceTabAddresses = (tabs, requestedNextTabAddressNumber = null) => {
+  const usedTabNumbers = new Set();
+  const retainedTabNumbers = tabs.map((tab) => {
+    const number = tab?.addressNumber;
+    if (!isAddressNumber(number) || usedTabNumbers.has(number)) return null;
+    usedTabNumbers.add(number);
+    return number;
+  });
+  let nextTabAddressNumber = isAddressNumber(requestedNextTabAddressNumber)
+    ? requestedNextTabAddressNumber
+    : 1;
+  for (const number of usedTabNumbers) {
+    nextTabAddressNumber = Math.max(nextTabAddressNumber, number + 1);
+  }
+
+  let changed = false;
+  const numberedTabs = tabs.map((tab, index) => {
+    const addressNumber = retainedTabNumbers[index] ?? nextTabAddressNumber++;
+    if (tab.addressNumber === addressNumber) return tab;
+    changed = true;
+    return { ...tab, addressNumber };
+  });
   const next = numberedTabs.map((tab) => {
     const panes = assignStableNumbers(tab.panes || []);
     if (panes === tab.panes) return tab;
     changed = true;
     return { ...tab, panes };
   });
-  return changed ? next : tabs;
+  return {
+    tabs: changed ? next : tabs,
+    nextTabAddressNumber,
+  };
 };
+
+export const stabilizeTabAddresses = (tabs) => stabilizeWorkspaceTabAddresses(tabs).tabs;
 
 /** 탭을 닫아도 세션이 살아남는가 — 모든 pane 이 영속(로컬 tmux / use_remote_tmux) 인지. */
 export const tabCloseKeepsSession = (tab, hosts = []) => !(tab?.panes || []).some((p) => {
