@@ -32,7 +32,7 @@ const HOST_TILE_OVERLAP_STEP_MOBILE_PX = 7;
 const HOST_TILE_MAX_VISIBLE_MOBILE = 3;
 
 export const Tab = memo(({
-  tab, index, isFirst = false, isActive, isBusy = false, isDragging = false, isDragOver = false,
+  tab, addressNumber, shortcutPosition, isFirst = false, isActive, isBusy = false, isDragging = false, isDragOver = false,
   isMobile = false,
   touchProps = null, // useTouchDragReorder.getItemProps(tab.id) — 모바일 드래그/터치 핸들러 일괄.
   isPendingClose = false,
@@ -229,10 +229,12 @@ export const Tab = memo(({
         {/* Ctrl+N 번호 — 아이콘 타일과 같은 네모에 담는다. 맨 숫자로 두면 sans 라벨 옆에서
             떠도는 모노 글자로 보이지만, 타일에 담기면 "식별자"로 읽힌다.
             (모바일 서브탭 번호도 같은 타일을 쓴다 — styles/numberTile) */}
-        {index != null && index <= 9 && (
+        {addressNumber != null && (
           <span
             aria-hidden
-            title={`${t?.('switchToTab') || 'Switch to tab'} (Ctrl+${index})`}
+            title={shortcutPosition <= 9
+              ? `${t?.('switchToTab') || 'Switch to tab'} (Ctrl+${shortcutPosition})`
+              : `#${addressNumber}`}
             style={{
               // 크기는 호스트 아이콘 타일과 **같은 변수**(tileSize)를 쓴다 — 숫자로 맞춰두면
               // 나중에 아이콘 타일만 조정할 때 소리 없이 어긋난다.
@@ -245,7 +247,7 @@ export const Tab = memo(({
               color: isActive ? color.subtext : color.muted,
             }}
           >
-            {index}
+            {addressNumber}
           </span>
         )}
 

@@ -226,7 +226,8 @@ const TabBar = ({
           <Tab
             key={tab.id}
             tab={tab}
-            index={idx + 1}
+            addressNumber={tab.addressNumber ?? idx + 1}
+            shortcutPosition={idx + 1}
             isFirst={idx === 0}
             isActive={tab.id === activeTabId}
             isBusy={!!busyTabIds && busyTabIds.has(tab.id)}

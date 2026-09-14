@@ -273,9 +273,10 @@ const HomeSessions = ({
           <div style={S.grid}>
             {openTabs.map((tab, idx) => (
               <OpenCard
-                key={`tab-${tab.id}`}
-                tab={tab}
-                index={idx + 1}
+                 key={`tab-${tab.id}`}
+                 tab={tab}
+                 addressNumber={tab.addressNumber ?? idx + 1}
+                 shortcutPosition={idx + 1}
                 isBusy={!!busyTabIds && busyTabIds.has(tab.id)}
                 onJump={() => onJumpTab?.(tab.id)}
                 t={t}
@@ -396,16 +397,17 @@ const HomeSessions = ({
 
 // ─── Cards ───────────────────────────────────────────────────────────────
 
-const OpenCard = ({ tab, index, isBusy = false, onJump, t }) => {
+const OpenCard = ({ tab, addressNumber, shortcutPosition, isBusy = false, onJump, t }) => {
   const accent = color.dotPalette[(tab.color_index || 0) % color.dotPalette.length];
   const Icon = tab.type === 'host' ? Server : Monitor;
   return (
     <Card accent={accent} onClick={onJump}>
-      {/* 순번 — 1~9 는 Ctrl+N 단축키와 동일, 그 이상은 단축키 없이 순서 표시용. */}
-      {index != null && (
+      {addressNumber != null && (
         <span
           aria-hidden
-          title={index <= 9 ? `${t?.('switchToTab') || 'Switch to tab'} (Ctrl+${index})` : `#${index}`}
+          title={shortcutPosition <= 9
+            ? `${t?.('switchToTab') || 'Switch to tab'} (Ctrl+${shortcutPosition})`
+            : `#${addressNumber}`}
           style={{
             fontFamily: font.mono,
             fontSize: '11px',
@@ -418,7 +420,7 @@ const OpenCard = ({ tab, index, isBusy = false, onJump, t }) => {
             textAlign: 'center',
           }}
         >
-          {index}
+          {addressNumber}
         </span>
       )}
       <IconBox accent={accent} busy={isBusy}>

@@ -24,4 +24,10 @@ describe('TabBarTab keyboard navigation', () => {
     render(<Tab tab={tab} index={0} isActive={false} t={(key) => key} />);
     expect(screen.getByRole('tab')).toHaveAttribute('tabindex', '-1');
   });
+
+  it('shows the stable address while keeping the positional shortcut', () => {
+    render(<Tab tab={tab} addressNumber={7} shortcutPosition={2} isActive t={(key) => key} />);
+
+    expect(screen.getByText('7')).toHaveAttribute('title', 'switchToTab (Ctrl+2)');
+  });
 });
