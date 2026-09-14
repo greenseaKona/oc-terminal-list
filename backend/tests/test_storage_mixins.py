@@ -37,8 +37,10 @@ async def test_host_roundtrip(storage):
 async def test_user_prefs_and_tab_state_roundtrip(storage):
     await storage.save_user_settings("u", {"theme": "dark"})
     assert (await storage.get_user_settings("u"))["theme"] == "dark"
-    assert await storage.save_tab_state("u", [{"id": "t1"}], "t1")
-    assert (await storage.get_tab_state("u"))["activeTabId"] == "t1"
+    assert await storage.save_tab_state("u", [{"id": "t1"}], "t1", 8)
+    state = await storage.get_tab_state("u")
+    assert state["activeTabId"] == "t1"
+    assert state["nextTabAddressNumber"] == 8
 
 
 @pytest.mark.anyio

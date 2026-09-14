@@ -175,9 +175,14 @@ class SchemaMixin:
                 username TEXT PRIMARY KEY,
                 tabs_json TEXT NOT NULL,
                 active_tab_id TEXT,
+                next_tab_address_number INTEGER NOT NULL DEFAULT 1,
                 updated_at TEXT NOT NULL
             )
         """)
+        try:
+            cursor.execute("ALTER TABLE tab_state ADD COLUMN next_tab_address_number INTEGER NOT NULL DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
 
         # 사용 통계 — 세션 attach/detach 1건당 row 1개. 가벼운 이벤트 로그.
         # target_type: 'local' | 'host', target_id: 'local' 고정 또는 host_id.

@@ -55,7 +55,7 @@ class UserPrefsMixin:
             conn = self._get_connection()
             try:
                 row = conn.execute(
-                    "SELECT tabs_json, active_tab_id, updated_at FROM tab_state WHERE username = ?",
+                    "SELECT tabs_json, active_tab_id, next_tab_address_number, updated_at FROM tab_state WHERE username = ?",
                     (username,),
                 ).fetchone()
                 if not row:
@@ -64,6 +64,7 @@ class UserPrefsMixin:
                     return {
                         "tabs": json.loads(row["tabs_json"]),
                         "activeTabId": row["active_tab_id"],
+                        "nextTabAddressNumber": row["next_tab_address_number"],
                         "updatedAt": row["updated_at"],
                     }
                 except (TypeError, ValueError):
@@ -86,7 +87,9 @@ class UserPrefsMixin:
                 self._release_connection(conn)
         return await asyncio.to_thread(_get)
 
-    async def save_tab_state(self, username: str, tabs: list, active_tab_id: str | None) -> str:
+    async def save_tab_state(
+        self, username: str, tabs: list, active_tab_id: str | None, next_tab_address_number: int = 1,
+    ) -> str:
         """탭 전체 상태 upsert. 새 updated_at 을 반환 — 호출자가 자기 변경의 버전을 기억하게."""
         tabs_json = json.dumps(tabs, ensure_ascii=False)
         new_updated_at = datetime.utcnow().isoformat()
@@ -94,8 +97,15 @@ class UserPrefsMixin:
             conn = self._get_connection()
             try:
                 conn.execute(
-                    "INSERT OR REPLACE INTO tab_state (username, tabs_json, active_tab_id, updated_at) VALUES (?, ?, ?, ?)",
-                    (username, tabs_json, active_tab_id, new_updated_at),
+                    """INSERT INTO tab_state
+                       (username, tabs_json, active_tab_id, next_tab_address_number, updated_at)
+                       VALUES (?, ?, ?, ?, ?)
+                       ON CONFLICT(username) DO UPDATE SET
+                         tabs_json = excluded.tabs_json,
+                         active_tab_id = excluded.active_tab_id,
+                         next_tab_address_number = MAX(tab_state.next_tab_address_number, excluded.next_tab_address_number),
+                         updated_at = excluded.updated_at""",
+                    (username, tabs_json, active_tab_id, next_tab_address_number, new_updated_at),
                 )
                 conn.commit()
             finally:
