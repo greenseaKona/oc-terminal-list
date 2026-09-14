@@ -709,6 +709,8 @@ const Pane = ({
           isBusy={isPaneBusy}
           sessionStatus={terminalStatus}
           sessionTargets={sessionTargets}
+          paneAddress={paneAddress}
+          onCopyAddress={itlAvailable && paneAddress ? handleCopyPaneTarget : null}
           onSplitPane={onSplitPane}
           onEqualizePane={onEqualizePane}
           activeFilePath={activeFilePath}
@@ -773,10 +775,9 @@ const Pane = ({
                 boxShadow: 'inset 0 0 0 1px rgba(245,158,11,0.15)',
               }} />
             )}
-            {/* pane 우상단 주소 배지(`탭.pane`) — **분할 여부와 무관하게 항상 단다.**
-                복사 버튼은 itl 이 있을 때만 붙는다(핸들이 `itl send` 라 없으면 무의미하다). */}
+            {/* Keep the floating address desktop-only; mobile renders it in the rail. */}
             <PaneAddressLabel
-              hidden={isMobile && !isMultiple}
+              hidden={isMobile}
               paneNumber={paneIndex + 1}
               tabNumber={tabNumber}
               fullAddress={paneAddress}

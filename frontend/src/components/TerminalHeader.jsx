@@ -82,6 +82,11 @@ const TerminalHeader = ({
   sessionStatus = null,
   /* 세션 간 명령 픽커 대상 — Pane 이 collectOtherPaneSessions 로 계산한 다른 세션 목록. */
   sessionTargets = [],
+  /* Pane address (`tab.pane`, e.g. "2.3") shown inside the mobile rail.
+     Desktop keeps the floating PaneAddressLabel. onCopyAddress is provided
+     only when itl is available because the copied handle invokes `itl send`. */
+  paneAddress = null,
+  onCopyAddress = null,
   isMobile = false,
   filePanelOpen = false,
   onFilePanelToggle = null,
@@ -440,11 +445,38 @@ const TerminalHeader = ({
 
         <CwdBreadcrumb paneInfo={paneInfo} loading={loading} disabled={disabled} ui={panelUi} onRefreshCwd={onRefreshCwd} t={t} />
 
-        {/* Right cluster: split buttons → busy dot → … menu */}
         <div style={{
           display: 'flex', flexDirection: 'row', alignItems: 'center',
           gap: '1px', flexShrink: 0,
         }}>
+            {isMobile && paneAddress && (() => {
+              const chipStyle = {
+                flexShrink: 0,
+                display: 'inline-flex', alignItems: 'center',
+                height: '18px', padding: '0 6px', marginRight: '3px',
+                borderRadius: '4px',
+                fontFamily: font.mono, fontSize: '9px', fontWeight: fontWeight.semibold, lineHeight: 1,
+                color: panelUi.subtext,
+                background: panelUi.surface0,
+                border: `1px solid color-mix(in srgb, ${panelUi.overlay0} 40%, transparent)`,
+                userSelect: 'none',
+                WebkitTapHighlightColor: 'transparent',
+              };
+              return onCopyAddress ? (
+                <button
+                  type="button"
+                  onClick={onCopyAddress}
+                  title={t?.('copyPaneTarget') || "Copy itl handle (itl send 1.2 'TEXT')"}
+                  style={{ ...chipStyle, cursor: 'pointer' }}
+                >
+                  {paneAddress}
+                </button>
+              ) : (
+                <span aria-hidden="true" style={{ ...chipStyle, pointerEvents: 'none' }}>
+                  {paneAddress}
+                </span>
+              );
+            })()}
             {/* Focus eye — stable status slot. Activity/session notices are only the dot overlay. */}
             {!disabled && (() => {
               const isEvicted = !!sessionStatus?.evicted;

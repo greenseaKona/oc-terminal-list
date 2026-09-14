@@ -282,6 +282,35 @@ describe('TerminalHeader', () => {
     });
   });
 
+  describe('mobile pane address chip', () => {
+    it('shows the pane address in the rail on mobile', () => {
+      render(<TerminalHeader {...baseProps({ isMobile: true, paneAddress: '2.3' })} />);
+      expect(screen.getByText('2.3')).toBeTruthy();
+    });
+
+    it('omits the chip on desktop — the floating badge owns the address there', () => {
+      render(<TerminalHeader {...baseProps({ paneAddress: '2.3' })} />);
+      expect(screen.queryByText('2.3')).toBeNull();
+    });
+
+    it('omits the chip when the pane has no address', () => {
+      render(<TerminalHeader {...baseProps({ isMobile: true })} />);
+      expect(screen.queryByText(/^\d+\.\d+$/)).toBeNull();
+    });
+
+    it('copies the itl handle on tap when a handler is provided', () => {
+      const onCopyAddress = vi.fn();
+      render(<TerminalHeader {...baseProps({ isMobile: true, paneAddress: '2.3', onCopyAddress })} />);
+      fireEvent.click(screen.getByText('2.3'));
+      expect(onCopyAddress).toHaveBeenCalledTimes(1);
+    });
+
+    it('renders a passive span when itl is unavailable', () => {
+      render(<TerminalHeader {...baseProps({ isMobile: true, paneAddress: '2.3' })} />);
+      expect(screen.getByText('2.3').tagName).toBe('SPAN');
+    });
+  });
+
   describe('Git context — empty string path (workspace root)', () => {
     it('enables git changes polling for gitContextPath="" (workspace root)', () => {
       // Should NOT crash or skip rendering — empty string is a valid path
