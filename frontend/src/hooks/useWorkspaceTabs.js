@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { migrateTab, makLocalTab, stabilizeTabAddresses } from '../utils/tabModel';
+import { migrateTab, makLocalTab, stabilizeWorkspaceTabAddresses } from '../utils/tabModel';
 import { areTabsEquivalent, tabsFingerprint, pickFallbackTabId } from '../utils/tabStateSync';
 import { authHeaders } from '../utils/auth';
 import { applyAgentStatusChanges, hydrateAgentStatus } from '../utils/agentStatusStore';
@@ -33,21 +33,29 @@ const injectOrphanSessions = (tabs, aliveSessions) => {
 export default function useWorkspaceTabs({ isAuthenticated }) {
   const [isRestoringWorkspace, setIsRestoringWorkspace] = useState(false);
 
-  const [tabs, setRawTabs] = useState(() => {
+  const [workspace, setWorkspace] = useState(() => {
     try {
       const stored = JSON.parse(localStorage.getItem('tabs_v2') || '[]');
-      return stabilizeTabAddresses(stored.map(migrateTab));
-    } catch { return []; }
+      const storedNext = Number(localStorage.getItem('next_tab_address_number'));
+      return stabilizeWorkspaceTabAddresses(stored.map(migrateTab), storedNext);
+    } catch { return stabilizeWorkspaceTabAddresses([]); }
   });
+  const { tabs, nextTabAddressNumber } = workspace;
   const setTabs = useCallback((update) => {
-    setRawTabs((previous) => stabilizeTabAddresses(
-      typeof update === 'function' ? update(previous) : update,
-    ));
+    setWorkspace((previous) => {
+      const updatedTabs = typeof update === 'function' ? update(previous.tabs) : update;
+      const next = stabilizeWorkspaceTabAddresses(updatedTabs, previous.nextTabAddressNumber);
+      if (next.tabs === previous.tabs && next.nextTabAddressNumber === previous.nextTabAddressNumber) return previous;
+      return next;
+    });
   }, []);
   const [activeTabId, setActiveTabId] = useState(() => localStorage.getItem('active_tab_id') || null);
 
   // localStorage 캐시 동기화 (같은 기기 새로고침 시 즉시 복원용)
   useEffect(() => { localStorage.setItem('tabs_v2', JSON.stringify(tabs)); }, [tabs]);
+  useEffect(() => {
+    localStorage.setItem('next_tab_address_number', String(nextTabAddressNumber));
+  }, [nextTabAddressNumber]);
   useEffect(() => {
     if (activeTabId) localStorage.setItem('active_tab_id', activeTabId);
     else localStorage.removeItem('active_tab_id');
@@ -98,7 +106,10 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
       } catch { /* noop */ }
     }
     const incoming = (serverState?.tabs?.length > 0)
-      ? stabilizeTabAddresses(serverState.tabs.map(migrateTab))
+      ? stabilizeWorkspaceTabAddresses(
+        serverState.tabs.map(migrateTab),
+        serverState.nextTabAddressNumber,
+      )
       : null;
     // 내용이 이미 같으면 **참조를 유지**한다. 새 배열을 돌려주면 저장 effect 가 다시 돌아
     // 같은 내용을 PUT → 서버가 버전을 새로 찍음 → 상대 기기가 또 적용 → … 무한 왕복.
@@ -106,21 +117,45 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
 
     if (!syncActive) {
       // 라이브 동기화 — 서버가 canonical. 서버에 탭이 없으면 로컬을 건드리지 않는다.
-      if (!incoming) return;
-      setTabs((prev) => keepIfSame(prev, incoming));
-      syncedTabsFingerprintRef.current = tabsFingerprint(incoming);
+      if (!incoming) {
+        setWorkspace((prev) => stabilizeWorkspaceTabAddresses(
+          prev.tabs,
+          Math.max(prev.nextTabAddressNumber, serverState?.nextTabAddressNumber || 1),
+        ));
+        return;
+      }
+      setWorkspace((prev) => {
+        const tabsToApply = keepIfSame(prev.tabs, incoming.tabs);
+        if (tabsToApply === prev.tabs && incoming.nextTabAddressNumber === prev.nextTabAddressNumber) return prev;
+        return { tabs: tabsToApply, nextTabAddressNumber: incoming.nextTabAddressNumber };
+      });
+      syncedTabsFingerprintRef.current = tabsFingerprint({
+        tabs: incoming.tabs,
+        nextTabAddressNumber: incoming.nextTabAddressNumber,
+      });
       if (serverState?.updatedAt) lastAppliedTabVersionRef.current = serverState.updatedAt;
       return;
     }
 
-    const injected = incoming ? injectOrphanSessions(incoming, aliveSessions) : null;
+    const injected = incoming ? injectOrphanSessions(incoming.tabs, aliveSessions) : null;
     if (injected) {
-      setTabs((prev) => keepIfSame(prev, injected));
+      const restored = stabilizeWorkspaceTabAddresses(injected, incoming.nextTabAddressNumber);
+      setWorkspace((prev) => {
+        const tabsToApply = keepIfSame(prev.tabs, restored.tabs);
+        if (tabsToApply === prev.tabs && restored.nextTabAddressNumber === prev.nextTabAddressNumber) return prev;
+        return { tabs: tabsToApply, nextTabAddressNumber: restored.nextTabAddressNumber };
+      });
       // 주입 없이 서버 상태 그대로면 이미 서버와 일치 — 로그인 직후 무의미한 PUT 을 막는다.
-      if (injected === incoming) syncedTabsFingerprintRef.current = tabsFingerprint(incoming);
+      if (injected === incoming.tabs) syncedTabsFingerprintRef.current = tabsFingerprint({
+        tabs: incoming.tabs,
+        nextTabAddressNumber: incoming.nextTabAddressNumber,
+      });
     } else {
       // 서버에 저장된 탭이 없다 — 로컬 상태를 유지하되 살아있는 세션만 되살린다.
-      setTabs((prev) => injectOrphanSessions(prev, aliveSessions));
+      setWorkspace((prev) => stabilizeWorkspaceTabAddresses(
+        injectOrphanSessions(prev.tabs, aliveSessions),
+        Math.max(prev.nextTabAddressNumber, serverState?.nextTabAddressNumber || 1),
+      ));
     }
     // 복원 시 활성 탭: **이 기기가 보던 탭이 아직 살아있으면 그걸 유지**한다. 서버 값은
     // 마지막으로 저장한 아무 기기의 것이라, 무조건 채택하면 새로고침할 때마다 PC 가 보던
@@ -130,7 +165,7 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
       return serverState?.activeTabId || null;
     });
     if (serverState?.updatedAt) lastAppliedTabVersionRef.current = serverState.updatedAt;
-  }, [setTabs]);
+  }, []);
 
   // 로그인 후 서버 탭 상태(canonical)와 alive 세션을 함께 조회해 완전 복원.
   // 복원 중에는 앱 shell 을 바로 보여주지 않아 저장된 탭/패널로 휙 넘어가는 느낌을 줄인다.
@@ -182,7 +217,7 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
   useEffect(() => {
     if (!isAuthenticated) return;
     if (isRestoringWorkspace) return;
-    const fingerprint = tabsFingerprint(tabs);
+    const fingerprint = tabsFingerprint({ tabs, nextTabAddressNumber });
     if (fingerprint === syncedTabsFingerprintRef.current) return;   // 서버와 동일 — 보낼 것 없음
     localDirtyRef.current = true;
     if (_saveTabTimer.current) clearTimeout(_saveTabTimer.current);
@@ -194,6 +229,7 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
           body: JSON.stringify({
             tabs,
             activeTabId,
+            nextTabAddressNumber,
             ifMatch: lastAppliedTabVersionRef.current,
           }),
         });
@@ -218,7 +254,7 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
       // 전에 한 번 예약됐다가 isRestoringWorkspace 로 취소되는) 경로에서 실제로 그랬다.
       localDirtyRef.current = false;
     };
-  }, [tabs, isAuthenticated, isRestoringWorkspace, applyServerTabState]);
+  }, [tabs, nextTabAddressNumber, isAuthenticated, isRestoringWorkspace, applyServerTabState]);
 
   // 다른 기기 (PC↔모바일) tab-state 변경을 SSE 로 수신 — 폴링 제거.
   // 서버가 PUT /api/tab-state 저장 직후 EventSource 로 updatedAt 을 push.

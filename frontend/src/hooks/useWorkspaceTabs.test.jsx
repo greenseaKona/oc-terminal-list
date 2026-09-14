@@ -90,6 +90,28 @@ describe('useWorkspaceTabs 서버 동기화', () => {
     expect(calls.put).toHaveLength(1);
   });
 
+  it('서버 high-water mark를 복원해 닫힌 최고 탭 번호를 재사용하지 않는다', async () => {
+    const first = { ...tab('a'), addressNumber: 1 };
+    const highest = { ...tab('b'), addressNumber: 7 };
+    const calls = setupFetch({
+      tabs: [first, highest],
+      activeTabId: 'a',
+      nextTabAddressNumber: 8,
+      updatedAt: 'v0',
+    });
+    const { result } = renderHook(() => useWorkspaceTabs({ isAuthenticated: true }));
+    await waitFor(() => expect(result.current.isRestoringWorkspace).toBe(false));
+
+    act(() => result.current.setTabs((prev) => [
+      ...prev.filter((item) => item.id !== 'b'),
+      tab('c'),
+    ]));
+    await flushSave();
+
+    expect(result.current.tabs.map((item) => item.addressNumber)).toEqual([1, 8]);
+    expect(calls.put[0].nextTabAddressNumber).toBe(9);
+  });
+
   it('복원 시 이 기기가 보던 탭을 유지한다 (다른 기기 활성 탭에 끌려가지 않음)', async () => {
     localStorage.setItem('active_tab_id', 'b');
     setupFetch({ tabs: [tab('a'), tab('b')], activeTabId: 'a', updatedAt: 'v0' });
