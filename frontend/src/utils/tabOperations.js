@@ -120,12 +120,12 @@ export const dropTabToSplitPaneOp = (tabs, { sourceTabId, targetTabId, targetPan
 
       const newDestPanes = currentPanes.map((p) =>
         p.id === targetPaneId
-          ? { ...sp, id: p.id, tmuxSessionName: getEffectiveSession(sp) }
+          ? { ...sp, id: p.id, addressNumber: p.addressNumber, tmuxSessionName: getEffectiveSession(sp) }
           : p,
       );
       const newSrcPanes = (srcTab.panes || []).map((p) =>
         p.id === sp.id
-          ? { ...targetOccupant, id: p.id, tmuxSessionName: dispSession }
+          ? { ...targetOccupant, id: p.id, addressNumber: p.addressNumber, tmuxSessionName: dispSession }
           : p,
       );
 
@@ -153,7 +153,7 @@ export const dropTabToSplitPaneOp = (tabs, { sourceTabId, targetTabId, targetPan
     const filledPanes = currentPanes.map((p, i) => {
       if (emptyIndices.includes(i) && srcIdx < srcActivePanes.length) {
         const sp = srcActivePanes[srcIdx++];
-        return { ...sp, id: p.id, tmuxSessionName: getEffectiveSession(sp) };
+        return { ...sp, id: p.id, addressNumber: p.addressNumber, tmuxSessionName: getEffectiveSession(sp) };
       }
       return p;
     });
@@ -206,7 +206,7 @@ export const dropTabToSplitPaneOp = (tabs, { sourceTabId, targetTabId, targetPan
   const filledPanes = currentPanes.map((p, i) => {
     if (orderedEmpty.includes(i) && srcIdx < srcActivePanes.length) {
       const sp = srcActivePanes[srcIdx++];
-      return { ...sp, id: p.id, tmuxSessionName: getEffectiveSession(sp) };
+      return { ...sp, id: p.id, addressNumber: p.addressNumber, tmuxSessionName: getEffectiveSession(sp) };
     }
     return p;
   });
@@ -264,7 +264,7 @@ export const activatePaneOp = (tabs, { tabId, paneId, target = null, hosts, sett
     const filledPanes = currentPanes.map((p, i) => {
       if (emptyIndices.includes(i) && srcIdx < srcActivePanes.length) {
         const sp = srcActivePanes[srcIdx++];
-        return { ...sp, id: p.id, tmuxSessionName: getEffectiveSession(sp) };
+        return { ...sp, id: p.id, addressNumber: p.addressNumber, tmuxSessionName: getEffectiveSession(sp) };
       }
       return p;
     });
@@ -494,7 +494,7 @@ export const extractPaneToTabOp = (tabs, { tabId, paneId, hosts = [], now = 0 })
 
   // 원본 pane 을 통째로 복사 — mode/display/cwd 등 모든 필드가 누락 없이 따라온다.
   // id 만 새로 발급 (새 탭의 새 pane 이므로).
-  const newPane = { ...ownPaneCwd(pane, src), id: generateUUID() };
+  const newPane = { ...ownPaneCwd(pane, src), id: generateUUID(), addressNumber: 1 };
   const newTabId = pane.hostId
     ? `host:${pane.hostId}:${now}:${newPane.id.slice(0, 6)}`
     : `local:${pane.sessionId}:${now}:${newPane.id.slice(0, 6)}`;
@@ -521,6 +521,12 @@ export const extractPaneToTabOp = (tabs, { tabId, paneId, hosts = [], now = 0 })
     layout: 'single',
     splitTree: makeLeaf(newPane.id),
     activePaneId: newPane.id,
+    addressNumber: (() => {
+      const used = new Set(tabs.map((item) => item.addressNumber).filter((number) => Number.isInteger(number) && number > 0));
+      let number = 1;
+      while (used.has(number)) number += 1;
+      return number;
+    })(),
     ...(pane.hostId ? { hostId: pane.hostId } : null),
     ...(pane.hostId && src.hostId === pane.hostId && src.tmuxSuffix ? { tmuxSuffix: src.tmuxSuffix } : null),
     ...(!pane.hostId && pane.sessionId ? { sessionId: pane.sessionId } : null),

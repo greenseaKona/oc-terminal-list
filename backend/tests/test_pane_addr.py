@@ -36,11 +36,13 @@ def _fresh(monkeypatch):
 
 def _tabs():
     return [
-        {"name": "one", "panes": [
-            {"id": "p1", "sessionId": "s-a"},
-            {"id": "p2", "sessionId": "s-b"},
+        {"name": "one", "addressNumber": 4, "panes": [
+            {"id": "p1", "sessionId": "s-a", "addressNumber": 2},
+            {"id": "p2", "sessionId": "s-b", "addressNumber": 7},
         ]},
-        {"name": "two", "panes": [{"id": "p3", "sessionId": "s-c"}]},
+        {"name": "two", "addressNumber": 9, "panes": [
+            {"id": "p3", "sessionId": "s-c", "addressNumber": 3},
+        ]},
     ]
 
 
@@ -58,8 +60,7 @@ async def test_each_local_session_gets_its_own_address(monkeypatch):
     fake = _FakeTmux()
     monkeypatch.setattr(pane_addr, "tmux_manager", fake)
     await pane_addr.stamp_local_addresses(_tabs())
-    # 주소는 1부터, 탭.pane — 화면의 PaneAddressLabel 과 같은 규칙이어야 한다.
-    assert fake.stamps == {"s-a": "1.1", "s-b": "1.2", "s-c": "2.1"}
+    assert fake.stamps == {"s-a": "4.2", "s-b": "4.7", "s-c": "9.3"}
 
 
 @pytest.mark.anyio
@@ -74,19 +75,31 @@ async def test_unchanged_addresses_do_not_call_tmux_again(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_numbers_shift_when_a_pane_closes(monkeypatch):
-    """⚠️ 이게 이 모듈이 존재하는 이유다 — 앞 pane 이 닫히면 뒤 번호가 당겨진다.
-    한 번 새기고 마는 구조였다면 상태바가 **틀린 주소**를 계속 보여준다."""
+async def test_survivor_address_stays_stable_when_a_pane_closes(monkeypatch):
     fake = _FakeTmux()
     monkeypatch.setattr(pane_addr, "tmux_manager", fake)
     await pane_addr.stamp_local_addresses(_tabs())
 
     closed_first_pane = [
-        {"name": "one", "panes": [{"id": "p2", "sessionId": "s-b"}]},
-        {"name": "two", "panes": [{"id": "p3", "sessionId": "s-c"}]},
+        {"name": "one", "addressNumber": 4, "panes": [
+            {"id": "p2", "sessionId": "s-b", "addressNumber": 7},
+        ]},
+        {"name": "two", "addressNumber": 9, "panes": [
+            {"id": "p3", "sessionId": "s-c", "addressNumber": 3},
+        ]},
     ]
     await pane_addr.stamp_local_addresses(closed_first_pane)
-    assert fake.stamps["s-b"] == "1.1"          # 1.2 → 1.1 로 당겨졌다
+    assert fake.stamps["s-b"] == "4.7"
+
+
+@pytest.mark.anyio
+async def test_legacy_state_falls_back_to_positional_addresses(monkeypatch):
+    fake = _FakeTmux()
+    monkeypatch.setattr(pane_addr, "tmux_manager", fake)
+    await pane_addr.stamp_local_addresses([
+        {"panes": [{"id": "p1", "sessionId": "legacy"}]},
+    ])
+    assert fake.stamps == {"legacy": "1.1"}
 
 
 @pytest.mark.anyio

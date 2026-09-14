@@ -2,10 +2,13 @@ import { describe, it, expect } from 'vitest';
 import {
   deriveTabPrimaryIdentity,
   deriveTabSecondaryIdentities,
+  getActivePane,
   makLocalTab,
   makeHostTab,
   migrateTab,
   paneIdentityKey,
+  resolvePaneLaunchSource,
+  stabilizeTabAddresses,
 } from './tabModel';
 
 const HOSTS = [
@@ -13,6 +16,21 @@ const HOSTS = [
   { id: 'h-pve', name: 'Proxmox VE', icon: 'Atom', color_index: 44 },
   { id: 'h-nas', name: 'TrueNAS Scale', icon: 'PieChart', color_index: 13 },
 ];
+
+describe('getActivePane', () => {
+  it('returns the active pane instead of the first pane', () => {
+    const first = { id: 'pane-1', cwd: 'stale' };
+    const active = { id: 'pane-2', cwd: 'current' };
+
+    expect(getActivePane({ panes: [first, active], activePaneId: active.id })).toBe(active);
+  });
+
+  it('falls back to the first pane for legacy tab state', () => {
+    const first = { id: 'pane-1' };
+
+    expect(getActivePane({ panes: [first], activePaneId: 'missing' })).toBe(first);
+  });
+});
 
 describe('tab factories — pane cwd ownership', () => {
   it('stores a selected local path on both the tab and its pane', () => {
@@ -36,6 +54,48 @@ describe('paneIdentityKey', () => {
     expect(paneIdentityKey({ hostId: 'h-pve' })).toBe('host:h-pve');
     expect(paneIdentityKey({ sessionId: 's1' })).toBe('local');
     expect(paneIdentityKey({})).toBeNull();
+  });
+});
+
+describe('resolvePaneLaunchSource', () => {
+  it('keeps an active local pane local inside a host-origin tab', () => {
+    const tab = { type: 'host', hostId: 'h-argon', cwd: '/srv/stale' };
+
+    expect(resolvePaneLaunchSource(tab, { sessionId: 'local-1' })).toEqual({ hostId: null, cwd: null });
+  });
+
+  it('does not inherit another host path for an active pane from a different host', () => {
+    const tab = { type: 'host', hostId: 'h-argon', cwd: '/srv/argon' };
+
+    expect(resolvePaneLaunchSource(tab, { hostId: 'h-pve' })).toEqual({ hostId: 'h-pve', cwd: null });
+  });
+
+  it('uses tab metadata only for a legacy pane without its own identity', () => {
+    const tab = { type: 'host', hostId: 'h-argon', cwd: '/srv/argon' };
+
+    expect(resolvePaneLaunchSource(tab, {})).toEqual({ hostId: 'h-argon', cwd: '/srv/argon' });
+  });
+});
+
+describe('stabilizeTabAddresses', () => {
+  it('preserves assigned numbers and fills the lowest free numbers', () => {
+    const tabs = stabilizeTabAddresses([
+      { id: 't3', addressNumber: 3, panes: [
+        { id: 'p3', addressNumber: 3 },
+        { id: 'new-pane' },
+      ] },
+      { id: 'new-tab', panes: [{ id: 'p1' }] },
+      { id: 't1', addressNumber: 1, panes: [{ id: 'p1', addressNumber: 1 }] },
+    ]);
+
+    expect(tabs.map((item) => item.addressNumber)).toEqual([3, 2, 1]);
+    expect(tabs[0].panes.map((item) => item.addressNumber)).toEqual([3, 1]);
+    expect(tabs[1].panes[0].addressNumber).toBe(1);
+  });
+
+  it('keeps object identity when every address is already stable', () => {
+    const tabs = [{ id: 't1', addressNumber: 4, panes: [{ id: 'p1', addressNumber: 7 }] }];
+    expect(stabilizeTabAddresses(tabs)).toBe(tabs);
   });
 });
 

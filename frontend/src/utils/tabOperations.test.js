@@ -12,7 +12,7 @@ const tab = (id, panes, extra = {}) => ({
   id, type: 'local', panes, layout: panes.length > 1 ? 'h' : 'single',
   activePaneId: panes[0]?.id, ...extra,
 });
-const filled = (id, sessionId) => pane(id, { sessionId });
+const filled = (id, sessionId, extra = {}) => pane(id, { sessionId, ...extra });
 
 describe('splitPaneOp', () => {
   it('빈 pane 을 하나 붙이고 그걸 활성으로 만든다', () => {
@@ -49,9 +49,13 @@ describe('splitPaneOp', () => {
 
 describe('reorderPaneOp', () => {
   it('두 pane 의 자리를 맞바꾼다', () => {
-    const [t] = reorderPaneOp([tab('t1', [filled('a', 's1'), filled('b', 's2')])],
+    const [t] = reorderPaneOp([tab('t1', [
+      filled('a', 's1', { addressNumber: 4 }),
+      filled('b', 's2', { addressNumber: 8 }),
+    ])],
       { tabId: 't1', fromPaneId: 'a', toPaneId: 'b' });
     expect(t.panes.map((p) => p.id)).toEqual(['b', 'a']);
+    expect(Object.fromEntries(t.panes.map((p) => [p.id, p.addressNumber]))).toEqual({ a: 4, b: 8 });
   });
 
   it('같은 pane 으로 떨구면 그대로 둔다', () => {
@@ -64,8 +68,8 @@ describe('dropTabToSplitPaneOp', () => {
   const noSession = () => null;
 
   it('center 로 점유된 pane 에 떨구면 두 세션을 맞바꾼다', () => {
-    const src = tab('src', [filled('sp', 'S')]);
-    const dst = tab('dst', [filled('dp', 'D')]);
+    const src = tab('src', [filled('sp', 'S', { addressNumber: 2 })]);
+    const dst = tab('dst', [filled('dp', 'D', { addressNumber: 9 })]);
     const out = dropTabToSplitPaneOp([src, dst], {
       sourceTabId: 'src', targetTabId: 'dst', targetPaneId: 'dp', dir: 'center',
       hosts: [], computePaneTmuxSession: noSession,
@@ -73,17 +77,20 @@ describe('dropTabToSplitPaneOp', () => {
     const byId = Object.fromEntries(out.map((t) => [t.id, t]));
     expect(byId.dst.panes[0].sessionId).toBe('S');
     expect(byId.src.panes[0].sessionId).toBe('D');   // 교환이므로 원본도 채워져 있어야
+    expect(byId.dst.panes[0].addressNumber).toBe(9);
+    expect(byId.src.panes[0].addressNumber).toBe(2);
   });
 
   it('center 로 빈 pane 에 떨구면 채우고 원본 탭은 사라진다', () => {
     const src = tab('src', [filled('sp', 'S')]);
-    const dst = tab('dst', [pane('dp')]);            // 빈 picker pane
+    const dst = tab('dst', [pane('dp', { addressNumber: 6 })]); // 빈 picker pane
     const out = dropTabToSplitPaneOp([src, dst], {
       sourceTabId: 'src', targetTabId: 'dst', targetPaneId: 'dp', dir: 'center',
       hosts: [], computePaneTmuxSession: noSession,
     });
     expect(out.map((t) => t.id)).toEqual(['dst']);
     expect(out[0].panes[0].sessionId).toBe('S');
+    expect(out[0].panes[0].addressNumber).toBe(6);
   });
 
   it('방향 드롭은 대상 pane 을 분할하고 새 자리에 원본을 넣는다', () => {
@@ -158,13 +165,14 @@ describe('activatePaneOp', () => {
 
   it("target={type:'tab'} 이면 원본 탭을 흡수하고 목록에서 지운다", () => {
     const src = tab('src', [filled('sp', 'S')]);
-    const dst = tab('dst', [pane('dp')]);
+    const dst = tab('dst', [pane('dp', { addressNumber: 5 })]);
     const out = activatePaneOp([src, dst], {
       tabId: 'dst', paneId: 'dp', target: { type: 'tab', sourceTabId: 'src' },
       hosts: [], settings: {}, computePaneTmuxSession: () => null,
     });
     expect(out.map((t) => t.id)).toEqual(['dst']);
     expect(out[0].panes[0].sessionId).toBe('S');
+    expect(out[0].panes[0].addressNumber).toBe(5);
   });
 
   it('흡수하려는 원본이 없으면 그대로 둔다', () => {
@@ -312,12 +320,14 @@ describe('collectTabCloseTargets', () => {
 
 describe('extractPaneToTabOp', () => {
   it('pane 을 새 탭으로 떼고 원본에서 지운다', () => {
-    const r = extractPaneToTabOp([tab('t1', [filled('a', 's1'), filled('b', 's2')])],
+    const r = extractPaneToTabOp([tab('t1', [filled('a', 's1', { addressNumber: 8 }), filled('b', 's2')], { addressNumber: 3 })],
       { tabId: 't1', paneId: 'a', hosts: [], now: 111 });
     expect(r.tabs).toHaveLength(2);
     expect(r.tabs[0].panes.map((p) => p.id)).toEqual(['b']);
     expect(r.tabs[1].id).toBe(r.newTabId);
     expect(r.tabs[1].panes[0].sessionId).toBe('s1');
+    expect(r.tabs[1].addressNumber).toBe(1);
+    expect(r.tabs[1].panes[0].addressNumber).toBe(1);
   });
 
   it('새 탭을 원본 바로 뒤에 끼워넣는다', () => {
@@ -374,12 +384,14 @@ const expectHolisticPreservation = (moved, source) => {
   for (const key of Object.keys(source)) {
     if (key === 'id') continue;              // 슬롯 고유 id — 대상 것을 쓴다
     if (key === 'tmuxSessionName') continue; // 새 탭 문맥에 맞게 재계산된다
+    if (key === 'addressNumber') continue;
     expect(moved[key]).toEqual(source[key]);
   }
   // 역방향: 이동한 pane 에 원본에 없는 필드가 슬롯에서 새어 들어오지 않았는지
   for (const key of Object.keys(moved)) {
     if (key === 'id') continue;
     if (key === 'tmuxSessionName') continue;
+    if (key === 'addressNumber') continue;
     expect(source[key]).toEqual(moved[key]);
   }
 };

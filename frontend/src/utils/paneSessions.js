@@ -44,12 +44,9 @@ export const collectOtherPaneSessions = (allTabs, {
         tabName: tab?.name || '',
         label: derivePaneLabel(pane, { hosts, settings, t }),
         isLocal: !!pane.sessionId && !pane.hostId,
-        // 전역 좌표(1-based) — 탭바 순서 × 탭 내 팬 순서. 백엔드 주소 체계(tabIdx.paneIdx,
-        // pane_targets.py)와 같은 규칙이라 서브탭에 적힌 번호 그대로와 대응한다.
-        // 탭 위치까지 합치면 목록 안에서 항상 유일 — "옆창"을 가리키는 확정 좌표.
-        tabIndex: tIdx + 1,
-        paneIndex: pIdx + 1,
-        address: `${tIdx + 1}.${pIdx + 1}`,
+        tabIndex: tab.addressNumber ?? tIdx + 1,
+        paneIndex: pane.addressNumber ?? pIdx + 1,
+        address: `${tab.addressNumber ?? tIdx + 1}.${pane.addressNumber ?? pIdx + 1}`,
         // 중복 라벨("This machine" 두 개) 식별용 맥락 — llmSessionPane 와 같은 규칙으로
         // pane 의 cwd 우선, 없으면 탭의 것(단일 pane 탭은 탭에만 있다).
         // App 상태에는 채워지지 않는 때가 많아 화면 표시는 fetchPaneCwdHints 를 따른다.

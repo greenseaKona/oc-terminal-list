@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { migrateTab, makLocalTab } from '../utils/tabModel';
+import { migrateTab, makLocalTab, stabilizeTabAddresses } from '../utils/tabModel';
 import { areTabsEquivalent, tabsFingerprint, pickFallbackTabId } from '../utils/tabStateSync';
 import { authHeaders } from '../utils/auth';
 import { applyAgentStatusChanges, hydrateAgentStatus } from '../utils/agentStatusStore';
@@ -33,12 +33,17 @@ const injectOrphanSessions = (tabs, aliveSessions) => {
 export default function useWorkspaceTabs({ isAuthenticated }) {
   const [isRestoringWorkspace, setIsRestoringWorkspace] = useState(false);
 
-  const [tabs, setTabs] = useState(() => {
+  const [tabs, setRawTabs] = useState(() => {
     try {
       const stored = JSON.parse(localStorage.getItem('tabs_v2') || '[]');
-      return stored.map(migrateTab);
+      return stabilizeTabAddresses(stored.map(migrateTab));
     } catch { return []; }
   });
+  const setTabs = useCallback((update) => {
+    setRawTabs((previous) => stabilizeTabAddresses(
+      typeof update === 'function' ? update(previous) : update,
+    ));
+  }, []);
   const [activeTabId, setActiveTabId] = useState(() => localStorage.getItem('active_tab_id') || null);
 
   // localStorage 캐시 동기화 (같은 기기 새로고침 시 즉시 복원용)
@@ -92,7 +97,9 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
         if (r.ok) aliveSessions = (await r.json()).filter((s) => s.alive);
       } catch { /* noop */ }
     }
-    const incoming = (serverState?.tabs?.length > 0) ? serverState.tabs.map(migrateTab) : null;
+    const incoming = (serverState?.tabs?.length > 0)
+      ? stabilizeTabAddresses(serverState.tabs.map(migrateTab))
+      : null;
     // 내용이 이미 같으면 **참조를 유지**한다. 새 배열을 돌려주면 저장 effect 가 다시 돌아
     // 같은 내용을 PUT → 서버가 버전을 새로 찍음 → 상대 기기가 또 적용 → … 무한 왕복.
     const keepIfSame = (prev, next) => (areTabsEquivalent(prev, next) ? prev : next);
@@ -123,7 +130,7 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
       return serverState?.activeTabId || null;
     });
     if (serverState?.updatedAt) lastAppliedTabVersionRef.current = serverState.updatedAt;
-  }, []);
+  }, [setTabs]);
 
   // 로그인 후 서버 탭 상태(canonical)와 alive 세션을 함께 조회해 완전 복원.
   // 복원 중에는 앱 shell 을 바로 보여주지 않아 저장된 탭/패널로 휙 넘어가는 느낌을 줄인다.

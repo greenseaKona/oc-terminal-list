@@ -1,11 +1,10 @@
 """저장된 탭 상태 → 주소가 붙은 터미널 목록.
 
-주소는 사람이 말하는 번호(`탭.pane`)다. 화면의 pane 배지(PaneAddressLabel)·tmux 하단
+주소는 사람이 말하는 번호(`탭.pane`)다. 화면의 pane 주소 칩·tmux 하단
 상태바(pane_addr)·실행 중 보드가 모두 이 한 규칙을 쓴다 — 세 곳이 각자 세면 "2번" 이
 가리키는 것이 화면마다 달라진다.
 
-⚠️ **번호는 밀린다.** pane 을 닫으면 뒤가 당겨진다. 그래서 이것은 저장하는 값이 아니라
-매번 다시 세는 값이다.
+한 번 부여된 번호는 저장되며 같은 탭 안에서 열고 닫거나 재배치해도 유지된다.
 """
 from __future__ import annotations
 
@@ -17,17 +16,23 @@ def build_targets(tabs: list, status_map: dict | None = None) -> list[dict]:
     """
     status_map = status_map or {}
     targets: list[dict] = []
-    for tab_index, tab in enumerate(tabs or [], start=1):
+    for position, tab in enumerate(tabs or [], start=1):
         if not isinstance(tab, dict):
             continue
         panes = [p for p in (tab.get("panes") or []) if isinstance(p, dict)]
         active_pane_id = tab.get("activePaneId")
-        for pane_index, pane in enumerate(panes, start=1):
+        tab_index = tab.get("addressNumber")
+        if not isinstance(tab_index, int) or isinstance(tab_index, bool) or tab_index <= 0:
+            tab_index = position
+        for pane_position, pane in enumerate(panes, start=1):
             session_id = pane.get("sessionId")
             host_id = pane.get("hostId")
             tmux_session = pane.get("tmuxSessionName")
             if not session_id and not (host_id and tmux_session):
                 continue          # 빈 picker pane — 보낼 곳이 없다
+            pane_index = pane.get("addressNumber")
+            if not isinstance(pane_index, int) or isinstance(pane_index, bool) or pane_index <= 0:
+                pane_index = pane_position
             key = session_id or tmux_session
             state = status_map.get(key) or {}
             targets.append({

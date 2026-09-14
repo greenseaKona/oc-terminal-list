@@ -5,19 +5,21 @@ import { collectOtherPaneSessions } from './paneSessions';
 const makeTabs = () => [
   {
     id: 'tab-a',
+    addressNumber: 4,
     name: 'work',
     panes: [
       { id: 'p1', mode: 'terminal', sessionId: 'sess1' },            // 로컬
-      { id: 'p2', mode: 'terminal', sessionId: 'sess2' },            // 로컬 2
+      { id: 'p2', mode: 'terminal', sessionId: 'sess2', addressNumber: 7 }, // 로컬 2
       { id: 'p3', mode: 'terminal' },                                 // 빈 pane
       { id: 'p4', mode: 'vnc', hostId: 'h1', display: 1 },            // VNC
     ],
   },
   {
     id: 'tab-b',
+    addressNumber: 9,
     name: 'server',
     panes: [
-      { id: 'p5', mode: 'terminal', hostId: 'h1', tmuxSessionName: 'mobile-1' },
+      { id: 'p5', mode: 'terminal', hostId: 'h1', tmuxSessionName: 'mobile-1', addressNumber: 3 },
       { id: 'p6', mode: 'editor' },                                   // editor pane
     ],
   },
@@ -110,14 +112,9 @@ describe('collectOtherPaneSessions', () => {
     expect(out[0].cwd).toBe('');
   });
 
-  it('tabIndex/paneIndex/address 는 원본 순번(1-based) — 빈 pane 등을 건너뛰어도 순번은 그대로', () => {
-    // makeTabs 의 sess2 는 tab-a 의 두번째 pane(p2) — p3(빈)/p4(vnc) 는 목록에서 빠지지만
-    // 순번은 배열 위치를 따르므로 화면의 pane 배치와 일치한다. address 는 pane 주소
-    // 체계(tabIdx.paneIdx)와 같은 형식이라 탭이 몇 개든 항상 유일하다.
+  it('tabIndex/paneIndex/address 는 한 번 부여된 안정 번호를 사용한다', () => {
     const out = collectOtherPaneSessions(makeTabs(), { excludePaneId: 'p1', excludeKey: 'sess1' });
-    expect(out.find((s) => s.key === 'sess2').paneIndex).toBe(2);
-    expect(out.find((s) => s.key === 'p5').paneIndex).toBe(1);
-    expect(out.find((s) => s.key === 'sess2')).toMatchObject({ tabIndex: 1, address: '1.2' });
-    expect(out.find((s) => s.key === 'p5')).toMatchObject({ tabIndex: 2, address: '2.1' });
+    expect(out.find((s) => s.key === 'sess2')).toMatchObject({ tabIndex: 4, paneIndex: 7, address: '4.7' });
+    expect(out.find((s) => s.key === 'p5')).toMatchObject({ tabIndex: 9, paneIndex: 3, address: '9.3' });
   });
 });

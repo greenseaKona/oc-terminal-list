@@ -146,14 +146,30 @@ export const paneIdentityKey = (pane) => {
   return null;
 };
 
+export const getActivePane = (tab) => {
+  const panes = tab?.panes || [];
+  return panes.find((pane) => pane.id === tab?.activePaneId) || panes[0] || null;
+};
+
+export const resolvePaneLaunchSource = (tab, pane) => {
+  const paneIdentity = paneIdentityKey(pane);
+  if (paneIdentity === 'local') {
+    return { hostId: null, cwd: pane.cwd ?? null };
+  }
+  if (pane?.hostId) {
+    const ownsTabIdentity = tab?.type === 'host' && pane.hostId === tab.hostId;
+    return { hostId: pane.hostId, cwd: pane.cwd ?? (ownsTabIdentity ? tab.cwd ?? null : null) };
+  }
+  return { hostId: tab?.hostId ?? null, cwd: pane?.cwd ?? tab?.cwd ?? null };
+};
+
 // 활성 pane 의 표시 정체성 — 탭 제목 타일(이름/아이콘/색)은 항상 활성 pane 을 따라간다.
 // 호스트 pane 이면 그 호스트, 로컬 pane 이면 Settings 의 This machine 값. 판별 불가(빈 pane,
 // 호스트 목록 미로딩/삭제)면 null — 호출부가 탭 스냅샷 값으로 폴백한다.
 // secondaries(deriveTabSecondaryIdentities)와 같은 활성 pane 기준을 써야 주 타일과 스택이
 // 절대 같은 정체성을 중복 표시하지 않는다.
 export const deriveTabPrimaryIdentity = (tab, hosts = [], settings = {}) => {
-  const panes = tab?.panes || [];
-  const activePane = panes.find((p) => p.id === tab?.activePaneId) || panes[0] || null;
+  const activePane = getActivePane(tab);
   if (activePane?.hostId) {
     const host = hosts.find((h) => h.id === activePane.hostId);
     if (!host) return null;
@@ -176,7 +192,7 @@ export const deriveTabPrimaryIdentity = (tab, hosts = [], settings = {}) => {
 export const deriveTabSecondaryIdentities = (tab, hosts = [], settings = {}) => {
   const panes = tab?.panes || [];
   if (panes.length < 2) return [];
-  const activePane = panes.find((p) => p.id === tab.activePaneId) || panes[0];
+  const activePane = getActivePane(tab);
   const activeKey = paneIdentityKey(activePane);
   if (!activeKey) return [];
   const seenKeys = new Set([activeKey]);
@@ -231,6 +247,44 @@ export const migrateTab = (t) => {
     ...(t.cwd != null ? { cwd: t.cwd } : null),
   });
   return { ...t, panes: [pane], layout: 'single', splitTree: makeLeaf(pane.id), activePaneId: pane.id };
+};
+
+const isAddressNumber = (value) => Number.isInteger(value) && value > 0;
+
+const assignStableNumbers = (items) => {
+  const used = new Set();
+  const retained = items.map((item) => {
+    const number = item?.addressNumber;
+    if (!isAddressNumber(number) || used.has(number)) return null;
+    used.add(number);
+    return number;
+  });
+  let candidate = 1;
+  let changed = false;
+  const next = items.map((item, index) => {
+    let addressNumber = retained[index];
+    if (addressNumber == null) {
+      while (used.has(candidate)) candidate += 1;
+      addressNumber = candidate;
+      used.add(addressNumber);
+    }
+    if (item.addressNumber === addressNumber) return item;
+    changed = true;
+    return { ...item, addressNumber };
+  });
+  return changed ? next : items;
+};
+
+export const stabilizeTabAddresses = (tabs) => {
+  const numberedTabs = assignStableNumbers(tabs);
+  let changed = numberedTabs !== tabs;
+  const next = numberedTabs.map((tab) => {
+    const panes = assignStableNumbers(tab.panes || []);
+    if (panes === tab.panes) return tab;
+    changed = true;
+    return { ...tab, panes };
+  });
+  return changed ? next : tabs;
 };
 
 /** 탭을 닫아도 세션이 살아남는가 — 모든 pane 이 영속(로컬 tmux / use_remote_tmux) 인지. */
