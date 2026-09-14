@@ -71,6 +71,7 @@ def test_put_with_stale_ifmatch_returns_409_and_current(client, storage_mock, tm
     storage_mock.get_tab_state.return_value = {
         "tabs": [{"id": "preserved", "type": "host", "panes": [{"id": "p1"}, {"id": "p2"}]}],
         "activeTabId": "preserved",
+        "nextTabAddressNumber": 12,
         "updatedAt": "2026-05-18T05:00:00",
     }
     res = client.put("/api/tab-state", json={
@@ -82,6 +83,7 @@ def test_put_with_stale_ifmatch_returns_409_and_current(client, storage_mock, tm
     body = res.json()
     assert body["detail"] == "tab-state version mismatch"
     assert body["current"]["tabs"][0]["id"] == "preserved"
+    assert body["current"]["nextTabAddressNumber"] == 12
     # stale 한 PUT 은 save 호출되면 안 됨
     storage_mock.save_tab_state.assert_not_awaited()
 
@@ -102,6 +104,7 @@ def test_put_with_identical_content_does_not_bump_version(client, storage_mock, 
     stored = {
         "tabs": [{"id": "host:x", "type": "host", "panes": []}],
         "activeTabId": "host:x",
+        "nextTabAddressNumber": 8,
         "updatedAt": "2026-05-18T02:00:00",
     }
     storage_mock.get_tab_state_updated_at.return_value = "2026-05-18T02:00:00"
@@ -111,13 +114,38 @@ def test_put_with_identical_content_does_not_bump_version(client, storage_mock, 
         res = client.put("/api/tab-state", json={
             "tabs": stored["tabs"],
             "activeTabId": stored["activeTabId"],
+            "nextTabAddressNumber": 8,
             "ifMatch": "2026-05-18T02:00:00",
         })
 
     assert res.status_code == 200
-    assert res.json() == {"status": "unchanged", "updatedAt": "2026-05-18T02:00:00"}
+    assert res.json() == {
+        "status": "unchanged",
+        "nextTabAddressNumber": 8,
+        "updatedAt": "2026-05-18T02:00:00",
+    }
     storage_mock.save_tab_state.assert_not_awaited()
     notify.assert_not_called()
+
+
+def test_put_never_moves_the_address_high_water_mark_backwards(client, storage_mock, tmux_mock):
+    storage_mock.get_tab_state.return_value = {
+        "tabs": [{"id": "host:x", "type": "host", "panes": []}],
+        "activeTabId": "host:x",
+        "nextTabAddressNumber": 12,
+        "updatedAt": "2026-05-18T02:00:00",
+    }
+
+    res = client.put("/api/tab-state", json={
+        "tabs": [{"id": "host:y", "type": "host", "addressNumber": 2, "panes": []}],
+        "activeTabId": "host:y",
+        "nextTabAddressNumber": 3,
+    })
+
+    assert res.status_code == 200
+    storage_mock.save_tab_state.assert_awaited_once_with(
+        "testuser", [{"id": "host:y", "type": "host", "addressNumber": 2, "panes": []}], "host:y", 12,
+    )
 
 
 def test_put_with_changed_active_tab_still_saves(client, storage_mock, tmux_mock):

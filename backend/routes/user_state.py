@@ -15,7 +15,7 @@ import logging
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, PositiveInt
 
 from _deps import AUTH_COOKIE_NAME, verify_auth_token
 from pane_addr import stamp_addresses
@@ -40,10 +40,25 @@ class UserSettingsRequest(BaseModel):
 class TabStateRequest(BaseModel):
     tabs: list
     activeTabId: str | None = None
+    nextTabAddressNumber: PositiveInt | None = None
     # 클라이언트가 마지막으로 본 서버 updatedAt — optimistic locking.
     # 값이 주어졌는데 현재 서버 값과 다르면 PUT 거부(409) + 최신 상태 반환.
     # 다중 기기에서 stale 한 클라이언트가 더 풍부한 상태(분할 pane 등)를 덮어쓰는 사고 방지.
     ifMatch: str | None = None
+
+
+def _next_tab_address_number(tabs: list, *candidates: int | None) -> int:
+    next_number = 1
+    for tab in tabs:
+        if not isinstance(tab, dict):
+            continue
+        number = tab.get("addressNumber")
+        if isinstance(number, int) and not isinstance(number, bool) and number > 0:
+            next_number = max(next_number, number + 1)
+    for candidate in candidates:
+        if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate > 0:
+            next_number = max(next_number, candidate)
+    return next_number
 
 
 async def _sanitize_tab_state(
@@ -180,18 +195,22 @@ async def get_tab_state(username: str = Depends(verify_auth_token)):
     """
     state = await storage.get_tab_state(username)
     if not state:
-        return {"tabs": [], "activeTabId": None, "updatedAt": None}
+        return {"tabs": [], "activeTabId": None, "nextTabAddressNumber": 1, "updatedAt": None}
     raw_tabs = state.get("tabs")
     tabs = raw_tabs if isinstance(raw_tabs, list) else []
     raw_active_tab_id = state.get("activeTabId")
     active_tab_id = raw_active_tab_id if isinstance(raw_active_tab_id, str) else None
     updated_at = state.get("updatedAt")
+    next_tab_address_number = _next_tab_address_number(tabs, state.get("nextTabAddressNumber"))
     sanitized_tabs, sanitized_active_tab_id = await _sanitize_tab_state(tabs, active_tab_id, username)
     if sanitized_tabs != tabs or sanitized_active_tab_id != active_tab_id:
-        updated_at = await storage.save_tab_state(username, sanitized_tabs, sanitized_active_tab_id)
+        updated_at = await storage.save_tab_state(
+            username, sanitized_tabs, sanitized_active_tab_id, next_tab_address_number,
+        )
     return {
         "tabs": sanitized_tabs,
         "activeTabId": sanitized_active_tab_id,
+        "nextTabAddressNumber": next_tab_address_number,
         "updatedAt": updated_at,
     }
 
@@ -292,10 +311,24 @@ async def put_tab_state(
     # 전파된다. 받은 기기는 상태를 적용하고 그 적용이 다시 자기 PUT 을 부르므로, 기기 두 대만
     # 켜져 있어도 같은 내용이 1초 주기로 무한히 오간다. 여기서 끊는 게 근본이다.
     existing = await storage.get_tab_state(username)
-    if existing and existing.get("tabs") == tabs and existing.get("activeTabId") == active_tab_id:
-        return {"status": "unchanged", "updatedAt": existing.get("updatedAt")}
+    next_tab_address_number = _next_tab_address_number(
+        tabs,
+        request.nextTabAddressNumber,
+        existing.get("nextTabAddressNumber") if existing else None,
+    )
+    if (
+        existing
+        and existing.get("tabs") == tabs
+        and existing.get("activeTabId") == active_tab_id
+        and existing.get("nextTabAddressNumber", 1) == next_tab_address_number
+    ):
+        return {
+            "status": "unchanged",
+            "nextTabAddressNumber": next_tab_address_number,
+            "updatedAt": existing.get("updatedAt"),
+        }
 
-    updated_at = await storage.save_tab_state(username, tabs, active_tab_id)
+    updated_at = await storage.save_tab_state(username, tabs, active_tab_id, next_tab_address_number)
     _notify_tab_state_change(username, updated_at)
     # pane 번호가 바뀔 수 있는 **모든** 순간이 여기다(추가·닫기·순서변경 전부 탭 상태를 바꾼다).
     # 각 세션의 하단 상태바가 자기 주소를 그리도록 새겨 준다 — 자기 주소를 자기가
@@ -303,5 +336,8 @@ async def put_tab_state(
     # ⚠️ 로컬·원격을 **한 번에** 부른다. 나눠 부르면 언젠가 한쪽만 부르게 되고, 그러면
     # 원격 pane 만 낡은 번호를 들고 있는 상태가 조용히 생긴다.
     await stamp_addresses(tabs)
-    return {"status": "saved", "updatedAt": updated_at}
-
+    return {
+        "status": "saved",
+        "nextTabAddressNumber": next_tab_address_number,
+        "updatedAt": updated_at,
+    }

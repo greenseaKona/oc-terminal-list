@@ -53,6 +53,29 @@ async def test_tab_dropped_when_all_panes_dead():
 
 
 @pytest.mark.anyio
+async def test_get_preserves_address_counter_when_highest_tab_is_pruned(monkeypatch):
+    alive = _local_tab("t1", "alive", ["alive"])
+    alive["addressNumber"] = 2
+    dead = _local_tab("t2", "dead", ["dead"])
+    dead["addressNumber"] = 8
+    monkeypatch.setattr(user_state.storage, "get_tab_state", AsyncMock(return_value={
+        "tabs": [alive, dead],
+        "activeTabId": "t2",
+        "nextTabAddressNumber": 9,
+        "updatedAt": "before",
+    }))
+    save = AsyncMock(return_value="after")
+    monkeypatch.setattr(user_state.storage, "save_tab_state", save)
+
+    with patch.object(user_state.local_mux, "live_session_names", AsyncMock(return_value=_live("alive"))):
+        result = await user_state.get_tab_state("admin")
+
+    assert result["tabs"] == [alive]
+    assert result["nextTabAddressNumber"] == 9
+    save.assert_awaited_once_with("admin", [alive], "t1", 9)
+
+
+@pytest.mark.anyio
 async def test_no_pruning_when_tmux_list_empty():
     # 목록 조회는 일시 오류와 진짜 빈 상태를 구분 못 함 → 빈 결과면 정리 skip.
     # `none` 을 골랐을 때도 이 길로 온다(붙잡아 두는 것이 없으니 목록이 항상 비어 있다).
