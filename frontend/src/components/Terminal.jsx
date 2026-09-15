@@ -35,6 +35,7 @@ import { TerminalEdgeGutter, AuthPromptOverlay, TerminalContextMenu } from './te
 import { CopiedToast, FileDropOverlay, ImagePasteToast, ReconnectPill, TerminalSkeleton, MuxFallbackBanner } from './terminal/TerminalChrome';
 import { ConnectionTroubleCard, ShellClosingCard, ShellEndedCard, TakeoverCard } from './terminal/TerminalStatusCards';
 import attachTerminalFileDrop from './terminal/attachTerminalFileDrop';
+import attachIosHangulInput from './terminal/attachIosHangulInput';
 import { probeSpacingMs, claimProbeLease, releaseProbeLease } from './terminal/outageProbe';
 import attachTerminalInteractions from './terminal/attachTerminalInteractions';
 import createInputQueue, { isLatencySensitiveInput, WS_BUFFER_HIGH_WATER } from './terminal/createInputQueue';
@@ -83,6 +84,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
   const terminalRef = useRef(null);
   const touchOverlayRef = useRef(null);
   const xtermRef = useRef(null);
+  const iosHangulRef = useRef(null);
   const fitAddonRef = useRef(null);
   const searchAddonRef = useRef(null);
   // 예측 입력(predictive local echo) 엔진 — 키를 RTT 안 기다리고 유령 글자로 먼저 그림.
@@ -713,6 +715,9 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
     });
     inputRef.current = input;
     enqueueInputRef.current = input.enqueue;
+
+    const iosHangul = attachIosHangulInput(term);
+    iosHangulRef.current = iosHangul;
 
 
     /* WebGL 렌더러 — DOM 렌더러보다 입력→화면 반영이 빠르고 CPU 도 덜 먹는다.
@@ -1638,6 +1643,8 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
       onReadyChangeRef.current?.(false);
       interactions.detach();
       fileDrop.detach();
+      iosHangul.dispose();
+      iosHangulRef.current = null;
       try { wsRef.current?.close(); } catch {}
       connectRef.current = null;
       runPreflightRef.current = null;
@@ -1803,7 +1810,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
      (빠른입력·모바일바·팔레트) 양쪽으로 노출. 전부 ref 위에서만 동작한다. */
   const { copyAll } = useTerminalApi({
     refs: {
-      xtermRef, wsRef, searchAddonRef,
+      xtermRef, wsRef, searchAddonRef, iosHangulRef,
       enqueueInputRef, forceScrollToBottomRef, fitNowRef, webglRef,
       lastDimsRef, evictedRef, endedRef, hasContentRef,
     },

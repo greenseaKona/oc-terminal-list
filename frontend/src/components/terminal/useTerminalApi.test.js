@@ -48,6 +48,7 @@ const setup = (over = {}) => {
 
   const refs = {
     xtermRef: { current: term },
+    iosHangulRef: { current: over.ime },
     wsRef: { current: socket },
     searchAddonRef: { current: search },
     enqueueInputRef: { current: enqueue },
@@ -83,6 +84,53 @@ describe('useTerminalApi', () => {
   afterEach(() => { delete window.terminalSessions; });
 
   describe('입력 주입', () => {
+    it('sends the pending Hangul and toolbar Enter together', () => {
+      const ime = { active: true, prepareInput: vi.fn((data) => `한${data}`) };
+      const { enqueue } = setup({ ime });
+      api().sendData('\r');
+      expect(ime.prepareInput).toHaveBeenCalledWith('\r');
+      expect(enqueue).toHaveBeenCalledWith('한\r', { delay: 0, separateTrailingEnterMs: 40 });
+    });
+
+    it('does not send a toolbar Backspace consumed by composition', () => {
+      const { enqueue, socket } = setup({ ime: { active: true, prepareInput: () => '' } });
+      expect(api().sendData('\x7f')).toBe(true);
+      expect(enqueue).not.toHaveBeenCalled();
+      expect(socket.send).not.toHaveBeenCalled();
+    });
+
+    it('keeps queued syllables before a programmatic command', () => {
+      const { enqueue } = setup({ ime: { active: true, prepareInput: (data) => `글${data}` } });
+      api().sendCommand('입력');
+      expect(enqueue).toHaveBeenCalledWith('글입력\r', { delay: 0, priority: false, dropQueuedWheel: true, separateTrailingEnterMs: 40 });
+    });
+
+    it('separates committed Hangul from Enter on the socket fallback', () => {
+      vi.useFakeTimers();
+      try {
+        const { refs, socket } = setup({ ime: { active: true, prepareInput: (data) => `한${data}` } });
+        refs.enqueueInputRef.current = null;
+        api().sendData('\r');
+        expect(socket.send.mock.calls).toEqual([['한']]);
+        vi.advanceTimersByTime(40);
+        expect(socket.send.mock.calls).toEqual([['한'], ['\r']]);
+      } finally { vi.useRealTimers(); }
+    });
+
+    it('does not deliver a delayed IME Enter to a replacement socket', () => {
+      vi.useFakeTimers();
+      try {
+        const { refs, socket } = setup({ ime: { active: true, prepareInput: (data) => `한${data}` } });
+        refs.enqueueInputRef.current = null;
+        api().sendData('\r');
+        const replacement = { readyState: WebSocket.OPEN, send: vi.fn() };
+        refs.wsRef.current = replacement;
+        vi.advanceTimersByTime(40);
+        expect(socket.send.mock.calls).toEqual([['한']]);
+        expect(replacement.send).not.toHaveBeenCalled();
+      } finally { vi.useRealTimers(); }
+    });
+
     it('sendData 는 입력 큐를 태운다 (순서 보존·백프레셔)', () => {
       const { enqueue, socket } = setup();
 

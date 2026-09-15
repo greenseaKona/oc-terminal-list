@@ -86,7 +86,7 @@ Compose a command once, then pick exactly which terminals receive it. Panes are 
 
 ### Mobile
 
-Splits collapse into sub-tabs, and a key toolbar supplies `Esc`, `Tab`, `Ctrl+C`, arrows, and paste. Quick Input sidesteps the Korean IME issues that plague mobile terminal input.
+Splits collapse into sub-tabs, and a key toolbar supplies `Esc`, `Tab`, `Ctrl+C`, arrows, and paste. On iPhone/iPad, Hangul composition is previewed at the cursor and only committed text is sent, allowing direct terminal input. Quick Input remains available for longer messages.
 
 <p align="center">
   <img src="docs/screenshots/mobile.png" alt="Mobile view with sub-tabs and key toolbar" width="300">
@@ -392,7 +392,7 @@ sudo systemctl restart iterminallist.service
 ### Quick Input, voice, and targeting
 
 - Open Quick Input from the tab bar (keyboard icon), the mobile toolbar, or `Ctrl+Shift+Enter`.
-- It sidesteps mobile IME problems: type the whole command, then send it once.
+- Compose longer commands and send them once. iPhone/iPad also supports direct Hangul input in the terminal (screen-reader mode keeps xterm's native input handling).
 - Type directly or tap the mic to dictate via the Web Speech API.
 - Press the crosshair button to choose **which** terminals receive the command. Panes from every open tab are listed, grouped by tab — tap a tab heading to select all of its panes. With nothing selected, the command goes to the focused pane.
 - The **Command History** panel (eye icon) shows per-terminal history with infinite scroll. Click an entry to insert it at the cursor.
