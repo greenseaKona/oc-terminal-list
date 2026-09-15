@@ -85,7 +85,7 @@ describe('재연결 회복력', () => {
       expect(ws.closed).toBe(true);
     }, 20000);
 
-    it('브라우저 탭을 숨기면 데스크탑에서도 결국 끊는다 (밤새 방치 방어)', async () => {
+    it('데스크탑에서는 브라우저 탭을 오래 숨겨도 연결을 보존한다', async () => {
       const props = { sessionId: 's1', settings: testSettings(), isFocused: true, isMobile: false };
       render(<TerminalComponent {...props} isActive />);
       const ws = await openSocket();
@@ -94,8 +94,8 @@ describe('재연결 회복력', () => {
       await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
       await tick(6 * 60_000); // HIDDEN_TAB_GRACE_MS(5분) 초과
 
-      expect(ws.closed).toBe(true);
       Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+      expect(ws.closed).toBe(false);
     }, 20000);
   });
 

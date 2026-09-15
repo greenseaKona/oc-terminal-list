@@ -1897,10 +1897,8 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
   useEffect(() => {
     // 비활성 pane 절전 — 모바일에서만. 이유는 아래 graceFor() 참고.
     const INACTIVE_PANE_GRACE_MS = 60_000;
-    // 탭 자체를 숨김(다른 브라우저 탭으로 이동/최소화/잠금) — 더 길게. 잠깐 탭 전환에 매번
-    // 소켓을 닫으면 복귀 때마다 재연결+tmux 리플레이로 "응답 없는 느낌"이 난다. Chrome 도
-    // 보통 5분쯤 지나야 백그라운드 탭을 얼리므로, 그 전까진 소켓을 그대로 둬 즉시 스냅하고,
-    // 진짜 오래(밤새) 비울 때만 닫아 리소스 드레인/크래시를 막는다.
+    // Hidden mobile pages get a longer grace period. Keep the socket through short app switches,
+    // then release it before the mobile OS freezes or kills the whole page under resource pressure.
     const HIDDEN_TAB_GRACE_MS = 5 * 60_000;
     // "연결을 유지할까?" = 이 pane 이 활성이고 + 브라우저 탭이 화면에 보일 때만.
     // 둘 중 하나라도 아니면 grace 후 소켓을 닫고 완전히 조용해진다(하트비트·티켓·타이머 0).
@@ -1924,15 +1922,11 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
       }
       if (graceCloseTimerRef.current) return; // 이미 grace 예약됨
 
-      /* 브라우저 탭 자체를 숨긴 경우(다른 탭/최소화/잠금)는 기기와 무관하게 정리한다 — 길게.
-         단순 pane 비활성(앱은 보이는데 다른 pane 을 보는 중)은 *모바일에서만* 정리한다:
-         모바일은 안 보이는 pane 이 소켓·하트비트·티켓을 계속 돌리면 OS 가 탭을 통째로
-         죽인다(밤새 켜두면 뻗던 문제). 데스크탑엔 그 위험이 없고, 끊어봐야 탭을 오갈 때마다
-         재연결 + tmux 리플레이로 "재연결 중" 만 뜬다 — 이득 없이 비용만 든다. */
-      const grace = document.hidden
-        ? HIDDEN_TAB_GRACE_MS
-        : (isMobileRef.current ? INACTIVE_PANE_GRACE_MS : null);
-      if (grace === null) return; // 데스크탑 비활성 pane — 끊지 않는다
+      /* Only mobile pages release hidden or inactive sockets. A mobile OS may kill a page whose
+         unseen panes keep sockets, heartbeats, and tickets alive. Desktop browsers do not have that
+         constraint; closing every pane after five hidden minutes causes a visible reconnect burst. */
+      if (!isMobileRef.current) return;
+      const grace = document.hidden ? HIDDEN_TAB_GRACE_MS : INACTIVE_PANE_GRACE_MS;
       graceCloseTimerRef.current = setTimeout(() => {
         graceCloseTimerRef.current = null;
         const ws = wsRef.current;
