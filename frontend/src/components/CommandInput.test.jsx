@@ -544,6 +544,47 @@ describe('하단 도크 (모바일)', () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it('모바일 팝업에서 Enter 는 줄바꿈 대신 전송한다', () => {
+    const onSend = vi.fn();
+    render(<CommandInput {...base} docked={false} submitOnEnter command="ls" onSend={onSend} />);
+    const ta = screen.getByRole('dialog').querySelector('textarea');
+
+    fireEvent.keyDown(ta, { key: 'Enter' });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('모바일 팝업에서 조합 중 Enter 의 줄바꿈 입력도 한 번만 전송한다', () => {
+    const onSend = vi.fn();
+    render(<CommandInput {...base} docked={false} submitOnEnter command="한" onSend={onSend} />);
+    const ta = screen.getByRole('dialog').querySelector('textarea');
+
+    fireEvent.keyDown(ta, { key: 'Enter', isComposing: true });
+    const accepted = ta.dispatchEvent(new InputEvent('beforeinput', {
+      inputType: 'insertLineBreak', data: null, isComposing: true,
+      bubbles: true, cancelable: true,
+    }));
+
+    expect(accepted).toBe(false);
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend).toHaveBeenCalledWith('한', expect.anything(), {});
+  });
+
+  it('iPhone 이 Enter 를 insertText 개행으로 보고해도 전송한다', () => {
+    const onSend = vi.fn();
+    render(<CommandInput {...base} docked={false} submitOnEnter command="true" onSend={onSend} />);
+    const ta = screen.getByRole('dialog').querySelector('textarea');
+
+    const accepted = ta.dispatchEvent(new InputEvent('beforeinput', {
+      inputType: 'insertText', data: '\n', isComposing: true,
+      bubbles: true, cancelable: true,
+    }));
+
+    expect(accepted).toBe(false);
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend).toHaveBeenCalledWith('true', expect.anything(), {});
+  });
+
   it('모달에서는 Enter 가 줄바꿈 그대로 — 데스크탑 습관을 바꾸지 않는다', () => {
     const onSend = vi.fn();
     render(<CommandInput {...base} docked={false} command="ls" onSend={onSend} />);

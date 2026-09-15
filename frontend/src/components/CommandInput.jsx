@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Send, X, Eraser, ClipboardPaste, Mic, ChevronUp, ChevronDown, ImagePlus, Loader2 } from 'lucide-react';
 import Button from './common/Button';
@@ -39,7 +39,7 @@ const MIN_PANES_FOR_TARGETS = 2;
 
 /**
  * 모바일에서 한글 IME 자소 분리 문제를 우회하기 위한 별도 입력창.
- * Ctrl+Enter / Cmd+Enter 로 전송, ESC 로 닫기.
+ * 모바일은 Enter, 데스크탑은 Ctrl+Enter / Cmd+Enter 로 전송. ESC 로 닫기.
  *
  * 입력 보존: command/setCommand 가 부모(App.jsx) state 라 X/ESC/backdrop 으로
  * 닫아도 텍스트는 유지된다. 비우는 건 명시적 "Clear" 또는 "Send" 시에만.
@@ -55,9 +55,23 @@ const MIN_PANES_FOR_TARGETS = 2;
  * 그대로 돌면 터미널을 탭해도 포커스가 입력창으로 되튕겨 **터미널에 아무것도 못 친다.**
  * 그게 모달과 도크의 결정적 차이다.
  */
-const CommandInput = ({ isOpen, onClose, onSend, onSendKey = null, command, setCommand, t, language, terminalKey = null, panes = [], docked = false }) => {
+const CommandInput = ({ isOpen, onClose, onSend, onSendKey = null, command, setCommand, t, language, terminalKey = null, panes = [], docked = false, submitOnEnter = false }) => {
   const textareaRef = useRef(null);
   const modalRef = useRef(null);
+  const enterHandledRef = useRef(false);
+  const allowLineBreakRef = useRef(false);
+  const beforeInputHandlerRef = useRef(null);
+  const beforeInputListenerRef = useRef(null);
+  const setTextareaRef = useCallback((node) => {
+    if (textareaRef.current && beforeInputListenerRef.current) {
+      textareaRef.current.removeEventListener('beforeinput', beforeInputListenerRef.current);
+    }
+    textareaRef.current = node;
+    if (!node) return;
+    const listener = (event) => beforeInputHandlerRef.current?.(event);
+    beforeInputListenerRef.current = listener;
+    node.addEventListener('beforeinput', listener);
+  }, []);
   // 지난 명령 이력 패널 토글 — 헤더의 화살표 버튼으로 열고, 항목 클릭 시 textarea 에 채운다.
   const [historyOpen, setHistoryOpen] = useState(false);
   /* 도크는 상시 노출이라 "지금 어디에 쳐지나" 가 보이지 않으면 사용자가 매번 시험 삼아
@@ -184,8 +198,8 @@ const CommandInput = ({ isOpen, onClose, onSend, onSendKey = null, command, setC
 
   if (!isOpen) return null;
 
-  const handleSend = () => {
-    if (!command.trim()) {
+  const submitCommand = (text) => {
+    if (!text.trim()) {
       /* 내용 없이 보내기 = 터미널에 **Enter**. 프롬프트 확인·"계속" 처럼 잦은 동작이
          예전에는 [도크에서 손 떼기 → 터미널 누르기 → 엔터] 세 단계였다. 대상 선택을
          그대로 따른다 — 여러 pane 을 골라 뒀는데 하나에만 가면 그게 더 헷갈린다.
@@ -198,18 +212,19 @@ const CommandInput = ({ isOpen, onClose, onSend, onSendKey = null, command, setC
     // 첨부가 없으면 **동기로** 보낸다. 흔한 경우에 await 를 끼우면 클릭과 전송
     // 사이에 마이크로태스크가 들어가 체감 지연이 생긴다.
     if (!image.hasAttachments()) {
-      onSend(command, keys, {});
+      onSend(text, keys, {});
     } else {
       // 첨부가 있으면 대상 호스트마다 올린 뒤 그 pane 에 갈 텍스트의 경로만 갈아끼운다.
       // 입력창은 먼저 닫고 전송은 업로드가 끝나는 대로 — 사용자를 붙잡아두지 않는다.
-      image.resolveTextForTargets(command, keys, panes).then((textByKey) => {
-        onSend(command, keys, textByKey);
+      image.resolveTextForTargets(text, keys, panes).then((textByKey) => {
+        onSend(text, keys, textByKey);
         image.clearAttachments();
       });
     }
     setCommand('');
     onClose();
   };
+  const handleSend = () => submitCommand(command);
 
   const handleClear = () => {
     if (command.trim() && !confirm(t?.('confirmClearInput') || '입력한 내용을 모두 지우시겠습니까?')) return;
@@ -253,17 +268,49 @@ const CommandInput = ({ isOpen, onClose, onSend, onSendKey = null, command, setC
   const handleKeyDown = (e) => {
     /* 도크에서는 **Enter 가 전송**이다(줄바꿈은 Shift+Enter). 한 줄 보내려고 여는 자리인데
        Enter 가 줄바꿈이면 매번 Ctrl 을 같이 눌러야 하고, 폰 키보드에는 그 조합이 없다.
-       모달은 예전 그대로 Ctrl/Cmd+Enter — 거기서는 여러 줄을 쓰는 일이 흔하다.
+       데스크탑 모달은 Ctrl/Cmd+Enter — 거기서는 여러 줄을 쓰는 일이 흔하다.
        ⚠️ IME 조합 중의 Enter 는 확정이지 전송이 아니다. 한글을 치다 매번 날아간다. */
-    if (e.key === 'Enter' && !e.shiftKey && !(e.nativeEvent?.isComposing || e.isComposing)) {
-      if (docked || e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        handleSend();
-        return;
+    if (e.key === 'Enter') {
+      allowLineBreakRef.current = e.shiftKey;
+      enterHandledRef.current = false;
+      if (!e.shiftKey && !(e.nativeEvent?.isComposing || e.isComposing)) {
+        if (docked || submitOnEnter || e.ctrlKey || e.metaKey) {
+          enterHandledRef.current = true;
+          e.preventDefault();
+          submitCommand(textareaRef.current?.value ?? command);
+          return;
+        }
       }
     }
     if (e.key === 'Escape' && !docked) onClose();
   };
+
+  const handleBeforeInput = (e) => {
+    const inputType = e.nativeEvent?.inputType || e.inputType;
+    const data = e.nativeEvent?.data ?? e.data;
+    const isLineBreak = inputType === 'insertLineBreak'
+      || inputType === 'insertParagraph'
+      || (inputType === 'insertText' && (data === '\n' || data === '\r' || data === '\r\n'));
+    if (!isLineBreak) return;
+    if (allowLineBreakRef.current || (!docked && !submitOnEnter)) {
+      allowLineBreakRef.current = false;
+      return;
+    }
+    e.preventDefault();
+    if (enterHandledRef.current) {
+      enterHandledRef.current = false;
+      return;
+    }
+    submitCommand(textareaRef.current?.value ?? command);
+  };
+
+  const handleKeyUp = (e) => {
+    if (e.key === 'Enter') {
+      enterHandledRef.current = false;
+      allowLineBreakRef.current = false;
+    }
+  };
+  beforeInputHandlerRef.current = handleBeforeInput;
 
   // 모달 뒤 터미널 등으로 touch drag 가 leak 되지 않도록 overlay 에서 명시 차단.
   // (z-index 만으론 일부 모바일 브라우저에서 touchmove 가 underlying 에 forward 될 수 있음.)
@@ -399,10 +446,11 @@ const CommandInput = ({ isOpen, onClose, onSend, onSendKey = null, command, setC
 
   const textarea = (
     <textarea
-      ref={textareaRef}
+      ref={setTextareaRef}
       value={command}
       onChange={(e) => setCommand(e.target.value)}
       onKeyDown={handleKeyDown}
+      onKeyUp={handleKeyUp}
       onPaste={image.handlePaste}
       onBlur={() => {
         requestAnimationFrame(() => {
@@ -412,7 +460,7 @@ const CommandInput = ({ isOpen, onClose, onSend, onSendKey = null, command, setC
           focusToEnd(textareaRef.current);
         });
       }}
-      placeholder={docked
+      placeholder={(docked || submitOnEnter)
         ? (t?.('commandDockHint') || 'Enter 전송, Shift+Enter 줄바꿈')
         : (t?.('commandInputHint') || 'Shift+Enter for new line, Ctrl+Enter to send')}
       className="command-input-textarea"
@@ -466,10 +514,11 @@ const CommandInput = ({ isOpen, onClose, onSend, onSendKey = null, command, setC
           입력창이 가려지지 않게 한다. 닫혀 있으면 기존처럼 flex:1 로 채운다. */}
       <div style={historyOpen ? { ...styles.body, flex: '0 0 auto' } : styles.body}>
         <textarea
-          ref={textareaRef}
+          ref={setTextareaRef}
           value={command}
           onChange={(e) => setCommand(e.target.value)}
           onKeyDown={handleKeyDown}
+          onKeyUp={handleKeyUp}
           onPaste={image.handlePaste}
           onBlur={() => {
             requestAnimationFrame(() => {
@@ -478,7 +527,9 @@ const CommandInput = ({ isOpen, onClose, onSend, onSendKey = null, command, setC
               focusToEnd(textareaRef.current);
             });
           }}
-          placeholder={t?.('commandInputHint') || 'Shift+Enter for new line, Ctrl+Enter to send'}
+          placeholder={submitOnEnter
+            ? (t?.('commandDockHint') || 'Enter 전송, Shift+Enter 줄바꿈')
+            : (t?.('commandInputHint') || 'Shift+Enter for new line, Ctrl+Enter to send')}
           className="command-input-textarea"
           style={styles.textarea}
           autoFocus

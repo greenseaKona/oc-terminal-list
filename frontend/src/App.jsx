@@ -1584,6 +1584,7 @@ function App() {
         <LazyErrorBoundary><Suspense fallback={null}>
           <CommandInput
             docked={showCommandDock}
+            submitOnEnter={isMobile}
             isOpen={showCommandDock || commandInputOpen}
             onClose={() => setCommandInputOpen(false)}
             /* 빈 전송(도크 우측 버튼) → 그 대상들에 키를 그대로 흘린다. onSend 와 같은
