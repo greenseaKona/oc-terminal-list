@@ -51,6 +51,10 @@ modal: {
 - 입력 1~2개 → `maxWidth: 420px`, height auto.
 - 다중 섹션 폼 → `maxWidth: 520px`, `height: 88vh` 또는 `maxHeight: 80vh`.
 
+확인 모달 footer:
+- 모바일의 두 액션(취소/확인)은 한 줄에서 같은 너비로 나눈다. 버튼을 두 줄의 100% 폭으로 쌓아 모달을 불필요하게 키우지 않는다.
+- 세 액션은 좁은 화면에서 기존처럼 세로로 쌓아 긴 라벨과 안전한 터치 영역을 보존한다.
+
 backdrop 클릭으로 닫기. 내부 `onClick={(e) => e.stopPropagation()}`. ESC 도 닫기.
 
 ## 4. Settings 모달

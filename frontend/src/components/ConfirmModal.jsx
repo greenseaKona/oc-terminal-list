@@ -33,8 +33,9 @@ const ConfirmModal = ({
     <>
     <style>{`
       @media (max-width: 520px) {
-        .iterm-confirm-modal-actions { flex-direction: column; align-items: stretch !important; }
-        .iterm-confirm-modal-actions > button { width: 100%; margin-right: 0 !important; }
+        .iterm-confirm-modal-actions--split > button { flex: 1 1 0; min-width: 0; }
+        .iterm-confirm-modal-actions:not(.iterm-confirm-modal-actions--split) { flex-direction: column; align-items: stretch !important; }
+        .iterm-confirm-modal-actions:not(.iterm-confirm-modal-actions--split) > button { width: 100%; margin-right: 0 !important; }
       }
     `}</style>
     <GlassModal
@@ -63,7 +64,7 @@ const ConfirmModal = ({
         </>
       )}
       footerStyle={styles.footer}
-      footerClassName="iterm-confirm-modal-actions"
+      footerClassName={`iterm-confirm-modal-actions${onTertiary ? '' : ' iterm-confirm-modal-actions--split'}`}
     >
       <div style={styles.message}>{message}</div>
     </GlassModal>

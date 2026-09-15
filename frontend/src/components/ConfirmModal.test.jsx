@@ -3,6 +3,20 @@ import { render, screen } from '@testing-library/react';
 import ConfirmModal from './ConfirmModal';
 
 describe('ConfirmModal wrapping', () => {
+  it('marks two-action confirmations for an equal-width mobile row', () => {
+    render(
+      <ConfirmModal
+        isOpen
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+        title="Close tab"
+        message="This tab's session will end."
+      />,
+    );
+
+    expect(screen.getByRole('contentinfo')).toHaveClass('iterm-confirm-modal-actions--split');
+  });
+
   it('keeps Korean words intact on narrow screens', () => {
     render(
       <ConfirmModal
@@ -34,6 +48,7 @@ describe('ConfirmModal wrapping', () => {
     );
 
     const defer = screen.getByRole('button', { name: 'Decide later' });
+    expect(screen.getByRole('contentinfo')).not.toHaveClass('iterm-confirm-modal-actions--split');
     expect(defer).toHaveAttribute('data-modal-initial-focus', 'true');
     expect(defer).toHaveFocus();
     expect(defer).not.toHaveStyle({ outline: 'none' });
