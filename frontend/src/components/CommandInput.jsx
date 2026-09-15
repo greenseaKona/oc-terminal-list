@@ -59,6 +59,7 @@ const CommandInput = ({ isOpen, onClose, onSend, onSendKey = null, command, setC
   const textareaRef = useRef(null);
   const modalRef = useRef(null);
   const enterHandledRef = useRef(false);
+  const pendingComposingEnterRef = useRef(false);
   const allowLineBreakRef = useRef(false);
   const beforeInputHandlerRef = useRef(null);
   const beforeInputListenerRef = useRef(null);
@@ -273,8 +274,11 @@ const CommandInput = ({ isOpen, onClose, onSend, onSendKey = null, command, setC
     if (e.key === 'Enter') {
       allowLineBreakRef.current = e.shiftKey;
       enterHandledRef.current = false;
-      if (!e.shiftKey && !(e.nativeEvent?.isComposing || e.isComposing)) {
-        if (docked || submitOnEnter || e.ctrlKey || e.metaKey) {
+      pendingComposingEnterRef.current = false;
+      if (!e.shiftKey && (docked || submitOnEnter || e.ctrlKey || e.metaKey)) {
+        if (e.nativeEvent?.isComposing || e.isComposing) {
+          pendingComposingEnterRef.current = submitOnEnter;
+        } else {
           enterHandledRef.current = true;
           e.preventDefault();
           submitCommand(textareaRef.current?.value ?? command);
@@ -290,17 +294,49 @@ const CommandInput = ({ isOpen, onClose, onSend, onSendKey = null, command, setC
     const data = e.nativeEvent?.data ?? e.data;
     const isLineBreak = inputType === 'insertLineBreak'
       || inputType === 'insertParagraph'
-      || (inputType === 'insertText' && (data === '\n' || data === '\r' || data === '\r\n'));
+      || (inputType === 'insertText' && (
+        data === '\n' || data === '\r' || data === '\r\n'
+        || (data == null && pendingComposingEnterRef.current)
+      ));
     if (!isLineBreak) return;
     if (allowLineBreakRef.current || (!docked && !submitOnEnter)) {
-      allowLineBreakRef.current = false;
       return;
     }
     e.preventDefault();
-    if (enterHandledRef.current) {
-      enterHandledRef.current = false;
+    pendingComposingEnterRef.current = false;
+    if (enterHandledRef.current) return;
+    enterHandledRef.current = true;
+    submitCommand(textareaRef.current?.value ?? command);
+  };
+
+  const handleChange = (e) => {
+    const next = e.currentTarget.value;
+    const inputType = e.nativeEvent?.inputType;
+    const data = e.nativeEvent?.data;
+    const caret = e.currentTarget.selectionStart ?? next.length;
+    const insertedLineBreak = inputType === 'insertLineBreak'
+      || inputType === 'insertParagraph'
+      || (inputType === 'insertText' && (data === '\n' || data === '\r' || data === '\r\n'))
+      || (pendingComposingEnterRef.current && /(?:\r\n|\r|\n)$/.test(next.slice(0, caret)));
+    if ((docked || submitOnEnter) && !allowLineBreakRef.current && insertedLineBreak) {
+      pendingComposingEnterRef.current = false;
+      if (enterHandledRef.current) {
+        enterHandledRef.current = false;
+        return;
+      }
+      enterHandledRef.current = true;
+      const text = next.slice(0, caret).replace(/(?:\r\n|\r|\n)$/, '') + next.slice(caret);
+      submitCommand(text);
       return;
     }
+    allowLineBreakRef.current = false;
+    setCommand(next);
+  };
+
+  const handleCompositionEnd = () => {
+    if (!pendingComposingEnterRef.current) return;
+    pendingComposingEnterRef.current = false;
+    enterHandledRef.current = true;
     submitCommand(textareaRef.current?.value ?? command);
   };
 
@@ -448,9 +484,10 @@ const CommandInput = ({ isOpen, onClose, onSend, onSendKey = null, command, setC
     <textarea
       ref={setTextareaRef}
       value={command}
-      onChange={(e) => setCommand(e.target.value)}
+      onChange={handleChange}
       onKeyDown={handleKeyDown}
       onKeyUp={handleKeyUp}
+      onCompositionEnd={handleCompositionEnd}
       onPaste={image.handlePaste}
       onBlur={() => {
         requestAnimationFrame(() => {
@@ -516,9 +553,10 @@ const CommandInput = ({ isOpen, onClose, onSend, onSendKey = null, command, setC
         <textarea
           ref={setTextareaRef}
           value={command}
-          onChange={(e) => setCommand(e.target.value)}
+          onChange={handleChange}
           onKeyDown={handleKeyDown}
           onKeyUp={handleKeyUp}
+          onCompositionEnd={handleCompositionEnd}
           onPaste={image.handlePaste}
           onBlur={() => {
             requestAnimationFrame(() => {

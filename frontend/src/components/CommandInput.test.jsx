@@ -564,6 +564,10 @@ describe('하단 도크 (모바일)', () => {
       inputType: 'insertLineBreak', data: null, isComposing: true,
       bubbles: true, cancelable: true,
     }));
+    fireEvent.input(ta, {
+      target: { value: '한\n', selectionStart: 2 },
+      inputType: 'insertLineBreak', data: null, isComposing: true,
+    });
 
     expect(accepted).toBe(false);
     expect(onSend).toHaveBeenCalledTimes(1);
@@ -581,6 +585,68 @@ describe('하단 도크 (모바일)', () => {
     }));
 
     expect(accepted).toBe(false);
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend).toHaveBeenCalledWith('true', expect.anything(), {});
+  });
+
+  it('iPhone IME가 Enter 뒤 insertText의 data를 비워도 전송한다', () => {
+    const onSend = vi.fn();
+    render(<CommandInput {...base} docked={false} submitOnEnter command="한" onSend={onSend} />);
+    const ta = screen.getByRole('dialog').querySelector('textarea');
+
+    // WebKit may retain the IME composing flag on keydown and omit the line-break data.
+    fireEvent.keyDown(ta, { key: 'Enter', isComposing: true });
+    const accepted = ta.dispatchEvent(new InputEvent('beforeinput', {
+      inputType: 'insertText', data: null, isComposing: true,
+      bubbles: true, cancelable: true,
+    }));
+
+    expect(accepted).toBe(false);
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend).toHaveBeenCalledWith('한', expect.anything(), {});
+  });
+
+  it('iPhone IME가 Enter를 조합 확정으로만 보고해도 전송한다', () => {
+    const onSend = vi.fn();
+    render(<CommandInput {...base} docked={false} submitOnEnter command="한" onSend={onSend} />);
+    const ta = screen.getByRole('dialog').querySelector('textarea');
+
+    fireEvent.compositionStart(ta);
+    fireEvent.keyDown(ta, { key: 'Enter', keyCode: 229, isComposing: true });
+    ta.dispatchEvent(new InputEvent('beforeinput', {
+      inputType: 'insertCompositionText', data: '한', isComposing: true,
+      bubbles: true, cancelable: true,
+    }));
+    fireEvent.input(ta, { inputType: 'insertCompositionText', data: '한', isComposing: true });
+    fireEvent.compositionEnd(ta, { data: '한' });
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend).toHaveBeenCalledWith('한', expect.anything(), {});
+  });
+
+  it('iPhone이 beforeinput 없이 개행 input만 보내도 전송한다', () => {
+    const onSend = vi.fn();
+    const Harness = () => {
+      const [command, setCommand] = useState('true');
+      return (
+        <CommandInput
+          {...base}
+          docked={false}
+          submitOnEnter
+          command={command}
+          setCommand={setCommand}
+          onSend={onSend}
+        />
+      );
+    };
+    render(<Harness />);
+    const ta = screen.getByRole('dialog').querySelector('textarea');
+
+    fireEvent.input(ta, {
+      target: { value: 'true\n', selectionStart: 5 },
+      inputType: 'insertLineBreak', data: null,
+    });
+
     expect(onSend).toHaveBeenCalledTimes(1);
     expect(onSend).toHaveBeenCalledWith('true', expect.anything(), {});
   });
