@@ -14,35 +14,50 @@ import { pushCommand as pushCommandHistory } from '../../utils/commandHistory';
  */
 const useTerminalApi = ({ refs, forwardedRef, sessionId, paneId, tabId, isReady }) => {
   const {
-    xtermRef, wsRef, searchAddonRef,
+    xtermRef, wsRef, searchAddonRef, iosHangulRef,
     enqueueInputRef, forceScrollToBottomRef, fitNowRef, webglRef,
     lastDimsRef, evictedRef, endedRef, hasContentRef,
   } = refs;
 
   // 입력 큐를 우선 태우고(순서 보존·백프레셔), 큐가 없으면 소켓으로 직접.
   const sendData = useCallback((data) => {
+    const original = data;
+    data = iosHangulRef?.current?.prepareInput(data) ?? data;
+    // Backspace may only edit a local composing character.
+    if (data === '') return true;
+    const options = { delay: 0 };
+    // Preserve upstream's Enter boundary when a toolbar key commits the last syllable.
+    if (data !== original && data.endsWith('\r')) options.separateTrailingEnterMs = 40;
     if (looksLikeBulkCommand(data)) {
       try { pushCommandHistory(sessionId, data); } catch { /* noop */ }
     }
-    if (enqueueInputRef.current?.(data, { delay: 0 })) return true;
+    if (enqueueInputRef.current?.(data, options)) return true;
     if (wsRef.current?.readyState === WebSocket.OPEN && typeof data === 'string') {
-      wsRef.current.send(data);
+      const socket = wsRef.current;
+      if (options.separateTrailingEnterMs) {
+        socket.send(data.slice(0, -1));
+        setTimeout(() => {
+          if (wsRef.current === socket && socket.readyState === WebSocket.OPEN) socket.send('\r');
+        }, options.separateTrailingEnterMs);
+      } else socket.send(data);
       return true;
     }
     return false;
-  }, [sessionId, enqueueInputRef, wsRef]);
+  }, [sessionId, enqueueInputRef, wsRef, iosHangulRef]);
 
-  // 명령 한 줄 — 개행을 보장하고, 스크롤을 맨 아래로 내린 뒤 큐 앞에 꽂는다(priority).
-  // dropQueuedWheel — 밀린 휠 이벤트를 걷어내 명령이 스크롤 뒤에 밀리지 않게.
+  // Normalize Enter and drop queued wheel reports. iOS text keeps FIFO order;
+  // other clients retain command priority ahead of ordinary queued input.
   const sendCommand = useCallback((command) => {
     if (typeof command !== 'string' || !command.trim()) return false;
     try { pushCommandHistory(sessionId, command); } catch { /* noop */ }
     try { forceScrollToBottomRef.current?.(); } catch { /* noop */ }
     // Normalize only the final line break. Internal newlines are intentional multi-line input.
-    const payload = `${command.replace(/(?:\r\n|\r|\n)$/, '')}\r`;
+    const raw = `${command.replace(/(?:\r\n|\r|\n)$/, '')}\r`;
+    const payload = iosHangulRef?.current?.prepareInput(raw) ?? raw;
     if (enqueueInputRef.current?.(payload, {
       delay: 0,
-      priority: true,
+      // Keep queued syllables ahead of commands while the iOS bridge owns input.
+      priority: !iosHangulRef?.current?.active,
       dropQueuedWheel: true,
       separateTrailingEnterMs: 40,
     })) {
@@ -57,7 +72,7 @@ const useTerminalApi = ({ refs, forwardedRef, sessionId, paneId, tabId, isReady 
       return true;
     }
     return false;
-  }, [sessionId, enqueueInputRef, forceScrollToBottomRef, wsRef]);
+  }, [sessionId, enqueueInputRef, forceScrollToBottomRef, wsRef, iosHangulRef]);
 
   useImperativeHandle(forwardedRef, () => ({ sendData, sendCommand }), [sendData, sendCommand]);
 
