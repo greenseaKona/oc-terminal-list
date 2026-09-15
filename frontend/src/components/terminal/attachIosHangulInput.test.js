@@ -59,6 +59,27 @@ describe('iOS Hangul input', () => {
     expect(textarea.value).toBe('');
   });
 
+  it('sends one Enter when iOS follows keydown with insertLineBreak', () => {
+    nativeKey.mockImplementation((event) => {
+      if (event.key === 'Enter') term.input('\r', true);
+    });
+    compose('ㅎ', '한');
+
+    key('Enter', { keyCode: 13 });
+    edit('한\n', 'insertLineBreak', null);
+
+    expect(sent()).toBe('한\r');
+  });
+
+  it('commits pending text when Enter arrives during native composition', () => {
+    textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    edit('한', 'insertCompositionText', '한', { isComposing: true });
+
+    key('Enter', { keyCode: 13, isComposing: true });
+
+    expect(sent()).toBe('한\r');
+  });
+
   it('handles 받침 moving to the next syllable using the textarea, not event.data', () => {
     compose('ㄱ', '가', '간', '가나');
     expect(sent()).toBe('가');

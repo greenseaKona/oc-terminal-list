@@ -31,6 +31,7 @@ export default function attachIosHangulInput(term, { enabled = isIosWebKit() } =
   let baseline = normalize(textarea.value);
   let nativeComposition = false;
   let ignoreInputType = null;
+  let ignoreLineBreakAfterKeyDown = false;
   let disposed = false;
   const listeners = [];
   const preview = document.createElement('span');
@@ -143,6 +144,15 @@ export default function attachIosHangulInput(term, { enabled = isIosWebKit() } =
   };
 
   listen('keydown', (event) => {
+    const plainEnter = event.key === 'Enter'
+      && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+    if (plainEnter && (nativeComposition || event.isComposing)) {
+      event.preventDefault(); stop(event);
+      ignoreLineBreakAfterKeyDown = true;
+      emit(prepareInput('\r'));
+      return;
+    }
+    ignoreLineBreakAfterKeyDown = plainEnter;
     if (nativeComposition || event.isComposing) { stop(event); return; }
     if (!owned) baseline = normalize(textarea.value);
     const printable = event.key?.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
@@ -163,6 +173,7 @@ export default function attachIosHangulInput(term, { enabled = isIosWebKit() } =
     // onData events: that stream also contains automatic terminal query replies.
   });
   listen('keyup', (event) => {
+    if (event.key === 'Enter') ignoreLineBreakAfterKeyDown = false;
     // xterm refocuses its textarea on keyup. Native edits own the field while
     // there is retained context; no focus/selection churn between IME updates.
     if (owned || nativeComposition || event.isComposing || event.keyCode === 229) stop(event);
@@ -177,9 +188,12 @@ export default function attachIosHangulInput(term, { enabled = isIosWebKit() } =
     if (event.inputType === 'insertLineBreak' || event.inputType === 'insertParagraph') {
       // Some iOS keyboards emit beforeinput without a usable Enter keydown.
       event.preventDefault(); stop(event);
-      const data = prepareInput('\r');
       ignoreInputType = event.inputType;
-      emit(data);
+      if (ignoreLineBreakAfterKeyDown) {
+        ignoreLineBreakAfterKeyDown = false;
+        return;
+      }
+      emit(prepareInput('\r'));
     } else if (event.inputType === 'deleteContentBackward' && !textarea.value) {
       // An empty helper textarea cannot delete anything, but the remote shell can.
       event.preventDefault(); stop(event);
