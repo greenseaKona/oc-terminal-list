@@ -275,7 +275,7 @@ const assignStableNumbers = (items) => {
   return changed ? next : items;
 };
 
-export const stabilizeWorkspaceTabAddresses = (tabs, requestedNextTabAddressNumber = null) => {
+export const stabilizeWorkspaceTabAddresses = (tabs) => {
   const usedTabNumbers = new Set();
   const retainedTabNumbers = tabs.map((tab) => {
     const number = tab?.addressNumber;
@@ -283,16 +283,14 @@ export const stabilizeWorkspaceTabAddresses = (tabs, requestedNextTabAddressNumb
     usedTabNumbers.add(number);
     return number;
   });
-  let nextTabAddressNumber = isAddressNumber(requestedNextTabAddressNumber)
-    ? requestedNextTabAddressNumber
-    : 1;
-  for (const number of usedTabNumbers) {
-    nextTabAddressNumber = Math.max(nextTabAddressNumber, number + 1);
-  }
-
   let changed = false;
   const numberedTabs = tabs.map((tab, index) => {
-    const addressNumber = retainedTabNumbers[index] ?? nextTabAddressNumber++;
+    let addressNumber = retainedTabNumbers[index];
+    if (addressNumber == null) {
+      addressNumber = 1;
+      while (usedTabNumbers.has(addressNumber)) addressNumber += 1;
+      usedTabNumbers.add(addressNumber);
+    }
     if (tab.addressNumber === addressNumber) return tab;
     changed = true;
     return { ...tab, addressNumber };
@@ -303,6 +301,8 @@ export const stabilizeWorkspaceTabAddresses = (tabs, requestedNextTabAddressNumb
     changed = true;
     return { ...tab, panes };
   });
+  let nextTabAddressNumber = 1;
+  while (usedTabNumbers.has(nextTabAddressNumber)) nextTabAddressNumber += 1;
   return {
     tabs: changed ? next : tabs,
     nextTabAddressNumber,

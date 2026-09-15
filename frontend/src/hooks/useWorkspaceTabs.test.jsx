@@ -265,7 +265,7 @@ describe('useWorkspaceTabs 서버 동기화', () => {
     expect(result.current.canTerminateSessions).toBe(false);
   });
 
-  it('서버 high-water mark를 복원해 닫힌 최고 탭 번호를 재사용하지 않는다', async () => {
+  it('서버 high-water mark 대신 닫힌 탭의 빈 번호를 재사용한다', async () => {
     const first = { ...tab('a'), addressNumber: 1 };
     const highest = { ...tab('b'), addressNumber: 7 };
     const calls = setupFetch({
@@ -283,11 +283,11 @@ describe('useWorkspaceTabs 서버 동기화', () => {
     ]));
     await flushSave();
 
-    expect(result.current.tabs.map((item) => item.addressNumber)).toEqual([1, 8]);
-    expect(calls.put[0].nextTabAddressNumber).toBe(9);
+    expect(result.current.tabs.map((item) => item.addressNumber)).toEqual([1, 2]);
+    expect(calls.put[0].nextTabAddressNumber).toBe(3);
   });
 
-  it('오래 열린 닫기 확인도 최신 high-water mark를 되돌리지 않는다', async () => {
+  it('오래 열린 닫기 확인 뒤에도 현재 빈 번호를 재사용한다', async () => {
     const first = { ...tab('a'), addressNumber: 1 };
     const calls = setupFetch({
       tabs: [first], activeTabId: 'a', nextTabAddressNumber: 2, updatedAt: 'v0',
@@ -308,7 +308,7 @@ describe('useWorkspaceTabs 서버 동기화', () => {
     await act(async () => commitFromOpenConfirmation([first], 'a'));
     act(() => result.current.setTabs((prev) => [...prev, tab('c')]));
 
-    expect(result.current.tabs.at(-1).addressNumber).toBe(3);
+    expect(result.current.tabs.at(-1).addressNumber).toBe(2);
   });
 
   it('복원 시 이 기기가 보던 탭을 유지한다 (다른 기기 활성 탭에 끌려가지 않음)', async () => {

@@ -79,7 +79,7 @@ describe('resolvePaneLaunchSource', () => {
 });
 
 describe('stabilizeTabAddresses', () => {
-  it('preserves assigned tab numbers and appends after the legacy high-water mark', () => {
+  it('preserves assigned tab numbers and fills the lowest available gap', () => {
     const tabs = stabilizeTabAddresses([
       { id: 't3', addressNumber: 3, panes: [
         { id: 'p3', addressNumber: 3 },
@@ -89,12 +89,12 @@ describe('stabilizeTabAddresses', () => {
       { id: 't1', addressNumber: 1, panes: [{ id: 'p1', addressNumber: 1 }] },
     ]);
 
-    expect(tabs.map((item) => item.addressNumber)).toEqual([3, 4, 1]);
+    expect(tabs.map((item) => item.addressNumber)).toEqual([3, 2, 1]);
     expect(tabs[0].panes.map((item) => item.addressNumber)).toEqual([3, 1]);
     expect(tabs[1].panes[0].addressNumber).toBe(1);
   });
 
-  it('does not reuse a closed tab address when allocating a new tab', () => {
+  it('reuses the lowest closed tab address instead of growing without bound', () => {
     const initial = stabilizeWorkspaceTabAddresses([
       { id: 't1', addressNumber: 1, panes: [] },
       { id: 't8', addressNumber: 8, panes: [] },
@@ -106,17 +106,17 @@ describe('stabilizeTabAddresses', () => {
       { id: 'new', panes: [] },
     ], initial.nextTabAddressNumber);
 
-    expect(next.tabs.map((tab) => tab.addressNumber)).toEqual([1, 9]);
-    expect(next.nextTabAddressNumber).toBe(10);
+    expect(next.tabs.map((tab) => tab.addressNumber)).toEqual([1, 2]);
+    expect(next.nextTabAddressNumber).toBe(3);
   });
 
-  it('derives the next address above every legacy tab number', () => {
+  it('derives the next address from the lowest gap among legacy tab numbers', () => {
     const restored = stabilizeWorkspaceTabAddresses([
       { id: 't2', addressNumber: 2, panes: [] },
       { id: 't7', addressNumber: 7, panes: [] },
     ]);
 
-    expect(restored.nextTabAddressNumber).toBe(8);
+    expect(restored.nextTabAddressNumber).toBe(1);
   });
 
   it('keeps object identity when every address is already stable', () => {
