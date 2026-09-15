@@ -32,6 +32,13 @@ const injectOrphanSessions = (tabs, aliveSessions) => {
  */
 export default function useWorkspaceTabs({ isAuthenticated }) {
   const [isRestoringWorkspace, setIsRestoringWorkspace] = useState(false);
+  const [workspaceConflict, setWorkspaceConflict] = useState(null);
+  const workspaceConflictRef = useRef(null);
+  const [keepLocalPending, setKeepLocalPending] = useState(false);
+  const [authorityCommitPending, setAuthorityCommitPending] = useState(false);
+  const authorityCommitPendingRef = useRef(false);
+  const [saveRevision, setSaveRevision] = useState(0);
+  const workspaceAuthorityEpochRef = useRef(0);
 
   const [workspace, setWorkspace] = useState(() => {
     try {
@@ -41,7 +48,10 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
     } catch { return stabilizeWorkspaceTabAddresses([]); }
   });
   const { tabs, nextTabAddressNumber } = workspace;
+  const nextTabAddressNumberRef = useRef(nextTabAddressNumber);
+  nextTabAddressNumberRef.current = nextTabAddressNumber;
   const setTabs = useCallback((update) => {
+    workspaceAuthorityEpochRef.current += 1;
     setWorkspace((previous) => {
       const updatedTabs = typeof update === 'function' ? update(previous.tabs) : update;
       const next = stabilizeWorkspaceTabAddresses(updatedTabs, previous.nextTabAddressNumber);
@@ -86,11 +96,12 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
   // 채택했을 때 갱신하고, 저장 effect 는 지문이 같으면 PUT 자체를 건너뛴다.
   // 이게 두 기기 사이 tab-state 에코 왕복(내용 동일한데 버전만 계속 튀는)을 끊는 두 번째 자물쇠.
   const syncedTabsFingerprintRef = useRef(null);
+  const _saveTabTimer = useRef(null);
 
   // 다른 기기에서 받은 서버 상태를 로컬에 적용 (alive 세션 머지 포함).
   // 중요: activeTabId 는 라이브 동기화하지 않는다. 다른 기기/탭에서 활성 탭을 바꿀 때
   // 현재 화면까지 강제로 끌려가는 UX가 된다. 초기 복원 시에만 syncActive=true 로 한 번 반영.
-  const applyServerTabState = useCallback(async (serverState, { syncActive = false } = {}) => {
+  const applyServerTabState = useCallback(async (serverState, { syncActive = false, acceptEmpty = false } = {}) => {
     if (!serverState) return;
     // 살아있는 세션 "재입양"(orphan 주입)은 **초기 복원(syncActive)에서만** 한다.
     // 라이브 동기화(SSE·409 충돌)에서까지 매번 하면 치명적이다:
@@ -105,7 +116,7 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
         if (r.ok) aliveSessions = (await r.json()).filter((s) => s.alive);
       } catch { /* noop */ }
     }
-    const incoming = (serverState?.tabs?.length > 0)
+    const incoming = (serverState?.tabs?.length > 0 || (acceptEmpty && Array.isArray(serverState?.tabs)))
       ? stabilizeWorkspaceTabAddresses(
         serverState.tabs.map(migrateTab),
         serverState.nextTabAddressNumber,
@@ -114,6 +125,7 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
     // 내용이 이미 같으면 **참조를 유지**한다. 새 배열을 돌려주면 저장 effect 가 다시 돌아
     // 같은 내용을 PUT → 서버가 버전을 새로 찍음 → 상대 기기가 또 적용 → … 무한 왕복.
     const keepIfSame = (prev, next) => (areTabsEquivalent(prev, next) ? prev : next);
+    workspaceAuthorityEpochRef.current += 1;
 
     if (!syncActive) {
       // 라이브 동기화 — 서버가 canonical. 서버에 탭이 없으면 로컬을 건드리지 않는다.
@@ -167,6 +179,82 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
     if (serverState?.updatedAt) lastAppliedTabVersionRef.current = serverState.updatedAt;
   }, []);
 
+  const acceptServerWorkspace = useCallback(async () => {
+    const conflict = workspaceConflictRef.current;
+    if (!conflict?.current) return;
+    workspaceAuthorityEpochRef.current += 1;
+    workspaceConflictRef.current = null;
+    setWorkspaceConflict(null);
+    setKeepLocalPending(false);
+    await applyServerTabState(conflict.current, { acceptEmpty: true });
+    if (conflict.current.tabs.length === 0) setActiveTabId(null);
+  }, [applyServerTabState]);
+
+  const keepLocalWorkspace = useCallback(() => {
+    const conflict = workspaceConflictRef.current;
+    if (!conflict?.current) return;
+    workspaceAuthorityEpochRef.current += 1;
+    if (conflict.current.updatedAt) lastAppliedTabVersionRef.current = conflict.current.updatedAt;
+    setKeepLocalPending(true);
+    setSaveRevision((revision) => revision + 1);
+  }, []);
+
+  const commitWorkspaceTabs = useCallback(async (updatedTabs, updatedActiveTabId) => {
+    if (!isAuthenticated || isRestoringWorkspace) return false;
+    if (workspaceConflictRef.current || authorityCommitPendingRef.current) return false;
+
+    const next = stabilizeWorkspaceTabAddresses(updatedTabs, nextTabAddressNumberRef.current);
+    authorityCommitPendingRef.current = true;
+    setAuthorityCommitPending(true);
+    localDirtyRef.current = true;
+    workspaceAuthorityEpochRef.current += 1;
+    const authorityEpoch = workspaceAuthorityEpochRef.current;
+    if (_saveTabTimer.current) clearTimeout(_saveTabTimer.current);
+
+    try {
+      const res = await apiFetch('/api/tab-state', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tabs: next.tabs,
+          activeTabId: updatedActiveTabId,
+          nextTabAddressNumber: next.nextTabAddressNumber,
+          ifMatch: lastAppliedTabVersionRef.current,
+        }),
+      });
+      if (res.status === 409) {
+        const conflict = await res.json().catch(() => null);
+        if (conflict?.current) {
+          workspaceAuthorityEpochRef.current += 1;
+          workspaceConflictRef.current = conflict;
+          setWorkspaceConflict(conflict);
+        }
+        return false;
+      }
+      if (!res.ok) return false;
+      const data = await res.json().catch(() => null);
+      if (!data?.updatedAt) return false;
+      if (authorityEpoch !== workspaceAuthorityEpochRef.current) return false;
+
+      const committedWorkspace = stabilizeWorkspaceTabAddresses(
+        next.tabs,
+        Math.max(next.nextTabAddressNumber, data.nextTabAddressNumber || 1),
+      );
+      workspaceAuthorityEpochRef.current += 1;
+      lastAppliedTabVersionRef.current = data.updatedAt;
+      syncedTabsFingerprintRef.current = tabsFingerprint(committedWorkspace);
+      setWorkspace(committedWorkspace);
+      setActiveTabId(updatedActiveTabId);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      authorityCommitPendingRef.current = false;
+      setAuthorityCommitPending(false);
+      localDirtyRef.current = false;
+    }
+  }, [isAuthenticated, isRestoringWorkspace]);
+
   // 로그인 후 서버 탭 상태(canonical)와 alive 세션을 함께 조회해 완전 복원.
   // 복원 중에는 앱 shell 을 바로 보여주지 않아 저장된 탭/패널로 휙 넘어가는 느낌을 줄인다.
   useEffect(() => {
@@ -213,10 +301,10 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
   //   3) 지문 비교 — 서버와 내용이 같으면 PUT 자체를 안 한다. 서버는 내용이 같아도 저장할
   //      때마다 updated_at 을 새로 찍고 그게 SSE 로 상대 기기에 전파되므로, 이 가드가 없으면
   //      두 기기가 같은 내용을 영원히 되받아친다.
-  const _saveTabTimer = useRef(null);
   useEffect(() => {
     if (!isAuthenticated) return;
     if (isRestoringWorkspace) return;
+    if (workspaceConflict && !keepLocalPending) return;
     const fingerprint = tabsFingerprint({ tabs, nextTabAddressNumber });
     if (fingerprint === syncedTabsFingerprintRef.current) return;   // 서버와 동일 — 보낼 것 없음
     localDirtyRef.current = true;
@@ -234,17 +322,30 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
           }),
         });
         if (res.status === 409) {
-          // 다른 기기가 더 새 상태로 먼저 썼음 — 서버 상태로 즉시 동기화.
+          // Never replace the visible workspace silently. Destructive closes stay locked
+          // until the user chooses which side of the conflict to keep.
           const conflict = await res.json().catch(() => null);
           if (conflict?.current) {
-            await applyServerTabState(conflict.current);
+            workspaceAuthorityEpochRef.current += 1;
+            workspaceConflictRef.current = conflict;
+            setWorkspaceConflict(conflict);
           }
+          setKeepLocalPending(false);
         } else if (res.ok) {
           const data = await res.json().catch(() => null);
+          workspaceAuthorityEpochRef.current += 1;
           if (data?.updatedAt) lastAppliedTabVersionRef.current = data.updatedAt;
           syncedTabsFingerprintRef.current = fingerprint;   // 이제 서버와 일치
+          if (keepLocalPending) {
+            workspaceConflictRef.current = null;
+            setWorkspaceConflict(null);
+            setKeepLocalPending(false);
+          }
         }
-      } catch { /* offline ok — 다음 변경에 다시 시도 */ }
+      } catch {
+        // A failed keep-local CAS must remain visibly unresolved and destructive actions locked.
+        if (keepLocalPending) setKeepLocalPending(false);
+      }
       localDirtyRef.current = false;
     }, 800);
     return () => {
@@ -254,7 +355,7 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
       // 전에 한 번 예약됐다가 isRestoringWorkspace 로 취소되는) 경로에서 실제로 그랬다.
       localDirtyRef.current = false;
     };
-  }, [tabs, nextTabAddressNumber, isAuthenticated, isRestoringWorkspace, applyServerTabState]);
+  }, [tabs, nextTabAddressNumber, isAuthenticated, isRestoringWorkspace, workspaceConflict, keepLocalPending, saveRevision]);
 
   // 다른 기기 (PC↔모바일) tab-state 변경을 SSE 로 수신 — 폴링 제거.
   // 서버가 PUT /api/tab-state 저장 직후 EventSource 로 updatedAt 을 push.
@@ -281,13 +382,18 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
     const MAX_DELAY = 30000;
 
     const applyIfChanged = async (updatedAt) => {
+      const authorityEpoch = workspaceAuthorityEpochRef.current;
       if (!updatedAt || updatedAt === lastAppliedTabVersionRef.current) return;
       if (localDirtyRef.current) return;
+      if (workspaceConflictRef.current) return;
       try {
         const r2 = await apiFetch('/api/tab-state', { headers: authHeaders() });
-        if (!r2.ok || cancelled || localDirtyRef.current) return;
+        if (authorityEpoch !== workspaceAuthorityEpochRef.current) return;
+        if (!r2.ok || cancelled || localDirtyRef.current || workspaceConflictRef.current) return;
         const serverState = await r2.json();
-        if (cancelled || localDirtyRef.current) return;
+        if (authorityEpoch !== workspaceAuthorityEpochRef.current) return;
+        if (cancelled || localDirtyRef.current || workspaceConflictRef.current) return;
+        if (authorityEpoch !== workspaceAuthorityEpochRef.current) return;
         await applyServerTabState(serverState);
       } catch { /* offline noop */ }
     };
@@ -403,5 +509,12 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
 
   // setIsRestoringWorkspace 도 노출 — 로그인 직후 App 이 복원 로딩화면을 즉시 띄우기 위함
   // (restore effect 가 isAuthenticated 로 켜기 전 깜빡임 방지).
-  return { tabs, setTabs, activeTabId, setActiveTabId, isRestoringWorkspace, setIsRestoringWorkspace };
+  return {
+    tabs, setTabs, activeTabId, setActiveTabId, isRestoringWorkspace, setIsRestoringWorkspace,
+    workspaceConflict,
+    canTerminateSessions: workspaceConflict === null && !authorityCommitPending,
+    acceptServerWorkspace,
+    keepLocalWorkspace,
+    commitWorkspaceTabs,
+  };
 }

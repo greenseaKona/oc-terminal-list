@@ -89,6 +89,7 @@ const PaneGrid = ({
   onRenamePane,
   onDropTabToPane = null,
   onClosePaneImmediate = null,
+  getPaneCloseIdentity = null,
   reloadSignal = 0,
   equalizeRef = null,  // 부모가 equalizeCurrentTab 을 호출할 수 있도록 ref 노출
   /* Broadcast 토글은 TabBar(설정 버튼 옆)로 올라갔다. equalizeRef 와 같은 방식으로
@@ -529,7 +530,8 @@ const PaneGrid = ({
                   onReorderPane={onReorderPane}
                   onPaneDragToSplit={onPaneDragToSplit}
                   onDropTabToPane={onDropTabToPane}
-                  onCloseImmediate={onClosePaneImmediate ? () => onClosePaneImmediate(tab.id, pane.id) : null}
+                  onCloseImmediate={onClosePaneImmediate ? (identity) => onClosePaneImmediate(tab.id, pane.id, identity) : null}
+                  getCloseIdentity={getPaneCloseIdentity}
                   isBroadcasting={broadcastActive}
                   isBroadcastExcluded={broadcastExcluded.has(pane.id)}
                   onToggleBroadcastExclude={paneHandlers(pane.id).onToggleBroadcastExclude}
@@ -618,7 +620,8 @@ const PaneGrid = ({
             onReorderPane={onReorderPane}
             onPaneDragToSplit={onPaneDragToSplit}
             onDropTabToPane={onDropTabToPane}
-            onCloseImmediate={onClosePaneImmediate ? () => onClosePaneImmediate(tab.id, pane.id) : null}
+            onCloseImmediate={onClosePaneImmediate ? (identity) => onClosePaneImmediate(tab.id, pane.id, identity) : null}
+            getCloseIdentity={getPaneCloseIdentity}
             onEqualizePane={panes.length > 1 ? equalizeCurrentTab : null}
             isBroadcasting={broadcastActive}
             isBroadcastExcluded={broadcastExcluded.has(pane.id)}
@@ -781,7 +784,8 @@ const PaneGrid = ({
           onReorderPane={onReorderPane}
           onPaneDragToSplit={onPaneDragToSplit}
           onDropTabToPane={onDropTabToPane}
-          onCloseImmediate={onClosePaneImmediate ? () => onClosePaneImmediate(tab.id, pane.id) : null}
+          onCloseImmediate={onClosePaneImmediate ? (identity) => onClosePaneImmediate(tab.id, pane.id, identity) : null}
+          getCloseIdentity={getPaneCloseIdentity}
           onEqualizePane={panes.length > 1 ? equalizeCurrentTab : null}
           isBroadcasting={broadcastActive}
           isBroadcastExcluded={broadcastExcluded.has(pane.id)}

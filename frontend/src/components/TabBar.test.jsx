@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import TabBar from './TabBar';
 import { tokens } from '../styles/tokens';
 
@@ -118,6 +118,37 @@ describe('TabBar', () => {
       fireEvent.click(xButton);
       expect(onClose).toHaveBeenCalledWith('local:1');
     }
+  });
+
+  it('middle-click confirmation keeps the session identity from when close was requested', () => {
+    const original = {
+      id: 'local:1', type: 'local', sessionId: 'session-old', name: 'zsh',
+      panes: [{ id: 'pane-1', sessionId: 'session-old', mode: 'terminal' }],
+    };
+    const replacement = {
+      ...original,
+      sessionId: 'session-new',
+      panes: [{ id: 'pane-1', sessionId: 'session-new', mode: 'terminal' }],
+    };
+    const onCloseImmediate = vi.fn();
+    const props = {
+      activeTabId: original.id,
+      onSelect: vi.fn(),
+      onClose: vi.fn(),
+      onCloseImmediate,
+      onHome: vi.fn(),
+      t: (key) => key,
+    };
+    const { rerender } = render(<TabBar {...props} tabs={[original]} />);
+
+    fireEvent.mouseDown(screen.getByRole('tab'), { button: 1 });
+    rerender(<TabBar {...props} tabs={[replacement]} />);
+    fireEvent.click(within(screen.getByRole('tab')).getAllByRole('button')[0]);
+
+    expect(onCloseImmediate).toHaveBeenCalledWith(
+      original.id,
+      JSON.stringify(['session-old', '', JSON.stringify(['pane-1', 'session-old', '', '', 'terminal', ''])]),
+    );
   });
 
   it('navigates home when Home button is clicked', () => {

@@ -31,9 +31,7 @@ import { TMUX, fromHost as multiplexerFromHost, normalize as normalizeMultiplexe
 import { authHeaders } from './utils/auth';
 import { apiFetch } from './utils/apiFetch';
 import { resolveWorkspacePath } from './utils/terminalFileLinks';
-import {
-  paneCloseIdentity, resolveConfirmedPane, resolveConfirmedTab, tabCloseIdentity,
-} from './utils/confirmedClose';
+import { closePlanIdentity, paneCloseIdentity, tabCloseIdentity } from './utils/confirmedClose';
 import { loadDraft, saveDraft } from './utils/quickInputDraft';
 import {
   makeLeaf, treeFromLegacyLayout, splitLeaf, removeLeaf, ensureTree,
@@ -43,7 +41,7 @@ import { appendPaneAsSplit, appendPaneToTab } from './utils/tabPaneOpen';
 // 탭/pane 상태 전이 순수 리듀서 — 로직은 utils/tabOperations.js 가 소유(테스트 있음).
 import {
   splitPaneOp, dropTabToSplitPaneOp, activatePaneOp, reorderPaneOp, dropPaneToSplitOp,
-  removePaneOp, planPaneClose, collectTabCloseTargets, extractPaneToTabOp,
+  removePaneOp, planPaneClose, collectPaneCloseTargets, collectTabCloseTargets, extractPaneToTabOp,
 } from './utils/tabOperations';
 import {
   makePane, makLocalTab, makeFreshHostTmuxSessionName,
@@ -109,9 +107,20 @@ function App() {
   // ── tabs ──────────────────────────────────────────────────────────────────
   // 탭 상태 + 영속(localStorage·서버 저장/복원/SSE)은 useWorkspaceTabs 가 단일 소유.
   // 탭 "조작"(추가/닫기/분할/열기 등)은 아래 App 본체에 남아 setTabs/setActiveTabId 를 쓴다.
-  const { tabs, setTabs, activeTabId, setActiveTabId, isRestoringWorkspace, setIsRestoringWorkspace } = useWorkspaceTabs({ isAuthenticated });
+  const {
+    tabs, setTabs, activeTabId, setActiveTabId, isRestoringWorkspace, setIsRestoringWorkspace,
+    workspaceConflict, canTerminateSessions, acceptServerWorkspace, keepLocalWorkspace,
+    commitWorkspaceTabs,
+  } = useWorkspaceTabs({ isAuthenticated });
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
+  const canTerminateSessionsRef = useRef(canTerminateSessions);
+  canTerminateSessionsRef.current = canTerminateSessions;
+  const workspaceConflictModalRef = useRef(() => {});
+  const hostsRef = useRef(hosts);
+  hostsRef.current = hosts;
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
   // 딥링크(`?open=<sessionId>`, 텔레그램 "열기" 버튼 등) → 그 세션 탭·pane 활성화.
   // 복원이 끝나야 탭이 채워지므로 ready 로 "포기 시점"을 알려준다.
   useDeepLinkOpen({ tabs, setActiveTabId, setTabs, ready: isAuthenticated && !isRestoringWorkspace });
@@ -134,6 +143,19 @@ function App() {
     const base = tab?.tmuxSuffix ? `${baseFromHost}-${tab.tmuxSuffix}` : baseFromHost;
     return paneIndex === 0 ? base : `${base}_${paneIndex + 1}`;
   }, []);
+  const getCloseTargetOptions = useCallback(() => ({
+    hosts: hostsRef.current,
+    defaultMultiplexer: settingsRef.current.defaultMultiplexer,
+    computePaneTmuxSession,
+  }), [computePaneTmuxSession]);
+  const getPaneCloseIdentity = useCallback((tab, pane, paneIndex) => closePlanIdentity(
+    paneCloseIdentity(pane),
+    collectPaneCloseTargets(tab, pane, paneIndex, getCloseTargetOptions()),
+  ), [getCloseTargetOptions]);
+  const getTabCloseIdentity = useCallback((tab) => closePlanIdentity(
+    tabCloseIdentity(tab),
+    collectTabCloseTargets(tab, getCloseTargetOptions()),
+  ), [getCloseTargetOptions]);
 
   /* 홈·빈 pane 의 "이어할 수 있는 세션" 종료. **`allow_attached` 를 주지 않는다** —
      여기 뜬 카드는 정의상 "안 쓰는 세션" 이고, 붙어 있다면 그 판정이 낡은 것이다.
@@ -288,17 +310,27 @@ function App() {
   }, [hosts, settings, computePaneTmuxSession]);
 
   const closePane = useCallback((tabId, paneId, opts = {}) => {
-    const { skipConfirm = false } = opts;
+    if (!canTerminateSessionsRef.current) { workspaceConflictModalRef.current(); return; }
+    const { skipConfirm = false, expectedIdentity = null } = opts;
     const tab = tabs.find((tt) => tt.id === tabId);
     const pane = tab?.panes?.find((p) => p.id === paneId);
     if (!tab || !pane) return;
-    const expectedPaneIdentity = paneCloseIdentity(pane);
+    const paneIndex = tab.panes.findIndex((candidate) => candidate.id === paneId);
+    const expectedPaneIdentity = expectedIdentity || getPaneCloseIdentity(tab, pane, paneIndex);
 
-    const doClose = () => {
-      const resolved = resolveConfirmedPane(tabsRef.current, tabId, paneId, expectedPaneIdentity);
-      if (!resolved) return;
-      const { tab: currentTab, pane: currentPane, paneIndex } = resolved;
-      setTabs((prev) => removePaneOp(prev, { tabId, paneId }));
+    const doClose = async () => {
+      if (!canTerminateSessionsRef.current) { workspaceConflictModalRef.current(); return; }
+      const currentTab = tabsRef.current.find((candidate) => candidate.id === tabId);
+      const currentPaneIndex = currentTab?.panes?.findIndex((candidate) => candidate.id === paneId) ?? -1;
+      const currentPane = currentPaneIndex >= 0 ? currentTab.panes[currentPaneIndex] : null;
+      if (!currentPane || getPaneCloseIdentity(currentTab, currentPane, currentPaneIndex) !== expectedPaneIdentity) return;
+      const nextTabs = removePaneOp(tabsRef.current, { tabId, paneId });
+      const committed = await commitWorkspaceTabs(nextTabs, activeTabIdRef.current);
+      if (!committed) return;
+      if (getPaneCloseIdentity(currentTab, currentPane, currentPaneIndex) !== expectedPaneIdentity) {
+        bumpSessionRefresh();
+        return;
+      }
       // 로컬 세션 정리
       if (currentPane.sessionId && !currentPane.hostId) {
         fetch(`/api/sessions/${currentPane.sessionId}`, {
@@ -309,12 +341,13 @@ function App() {
       // pane 0 도 포함 — 단일 pane 케이스는 이미 closeTab 으로 위임됐으니 여긴 항상 멀티 pane 의
       // 한 pane. 잔류 세션이 안 남게 자기 것은 자기가 죽임.
       if (currentPane.hostId && currentPane.mode !== 'vnc') {
-        const host = hosts.find((h) => h.id === currentPane.hostId);
+        const currentSettings = settingsRef.current;
+        const host = hostsRef.current.find((h) => h.id === currentPane.hostId);
         const paneMux = currentPane.multiplexer
           ? normalizeMultiplexer(currentPane.multiplexer)
-          : multiplexerFromHost(host, settings.defaultMultiplexer);
+          : multiplexerFromHost(host, currentSettings.defaultMultiplexer);
         if (host && paneMux === TMUX) {
-          const targetSession = computePaneTmuxSession(host, currentTab, currentPane, paneIndex);
+          const targetSession = computePaneTmuxSession(host, currentTab, currentPane, currentPaneIndex);
           killRemoteTmuxSession(currentPane.hostId, targetSession);
         }
       }
@@ -345,7 +378,7 @@ function App() {
       message,
       onConfirm: doClose,
     });
-  }, [tabs, t, hosts, settings.defaultMultiplexer, computePaneTmuxSession, killRemoteTmuxSession]);
+  }, [tabs, t, getPaneCloseIdentity, computePaneTmuxSession, killRemoteTmuxSession, commitWorkspaceTabs]);
 
   const focusPane = useCallback((tabId, paneId) => {
     setTabs((prev) => prev.map((t) => t.id === tabId ? { ...t, activePaneId: paneId } : t));
@@ -374,33 +407,13 @@ function App() {
   }, []);
 
   const closeTab = useCallback((tabId, opts = {}) => {
-    const { skipConfirm = false } = opts;
+    if (!canTerminateSessionsRef.current) { workspaceConflictModalRef.current(); return; }
+    const { skipConfirm = false, expectedIdentity = null } = opts;
     const tab = tabs.find((t) => t.id === tabId);
     if (!tab) return;
-    const expectedTabIdentity = tabCloseIdentity(tab);
+    const expectedTabIdentity = expectedIdentity || getTabCloseIdentity(tab);
 
-    const removeTabOnly = (currentTabs) => {
-      /* Remove from the current array. Replacing it with the snapshot captured before a
-         confirmation modal can resurrect intervening cwd/name changes. */
-      const idx = currentTabs.findIndex((t) => t.id === tabId);
-      if (idx < 0) return;
-      const remaining = currentTabs.filter((t) => t.id !== tabId);
-      setTabs((latestTabs) => latestTabs.filter((t) => t.id !== tabId));
-      setActiveTabId((currentActiveId) => {
-        if (currentActiveId !== tabId) return currentActiveId;
-        return remaining[Math.max(0, idx - 1)]?.id || remaining[0]?.id || null;
-      });
-      bumpSessionRefresh();
-    };
-
-    const terminateSessions = (tabToClose) => {
-      /* A merged tab may contain local and remote panes regardless of tab.type. Terminate
-         each pane by its own identity so closing the tab cannot orphan half its sessions. */
-      const targets = collectTabCloseTargets(tabToClose, {
-        hosts,
-        defaultMultiplexer: settings.defaultMultiplexer,
-        computePaneTmuxSession,
-      });
+    const terminateSessions = (targets) => {
       targets.localSessionIds.forEach((sessionId) => {
         fetch(`/api/sessions/${sessionId}`, {
           method: 'DELETE',
@@ -412,18 +425,29 @@ function App() {
 
     // 단순·명료 모델: 탭 닫기 = 그 탭의 내부 세션을 전부 종료한다. detach(세션 유지) 개념 없음.
     // (네트워크 끊김 자동 재연결은 회복력 — Terminal.jsx 가 따로 책임. 여긴 사용자의 명시적 닫기만.)
-    const closeAndTerminate = () => {
+    const closeAndTerminate = async () => {
+      if (!canTerminateSessionsRef.current) { workspaceConflictModalRef.current(); return; }
       const currentTabs = tabsRef.current;
-      const currentTab = resolveConfirmedTab(currentTabs, tabId, expectedTabIdentity);
-      if (!currentTab) return;
-      terminateSessions(currentTab);
-      removeTabOnly(currentTabs);
+      const currentIndex = currentTabs.findIndex((candidate) => candidate.id === tabId);
+      const currentTab = currentTabs.find((candidate) => candidate.id === tabId);
+      if (!currentTab || getTabCloseIdentity(currentTab) !== expectedTabIdentity) return;
+      const remaining = currentTabs.filter((candidate) => candidate.id !== tabId);
+      const currentActiveId = activeTabIdRef.current;
+      const nextActiveId = currentActiveId === tabId
+        ? remaining[Math.max(0, currentIndex - 1)]?.id || remaining[0]?.id || null
+        : currentActiveId;
+      const committed = await commitWorkspaceTabs(remaining, nextActiveId);
+      if (!committed) return;
+      if (getTabCloseIdentity(currentTab) === expectedTabIdentity) {
+        terminateSessions(collectTabCloseTargets(currentTab, getCloseTargetOptions()));
+      }
+      bumpSessionRefresh();
     };
 
     // 살아있는 세션이 하나도 없는 빈/신규 탭은 물어볼 게 없다 — 바로 닫는다.
     const hasLiveSession = !!tab.sessionId || !!tab.hostId
       || (tab.panes || []).some((p) => p.sessionId || p.hostId);
-    if (!hasLiveSession) { removeTabOnly(tabsRef.current); return; }
+    if (!hasLiveSession) { closeAndTerminate(); return; }
 
     // 휠 클릭 인라인 confirm 등 이미 확인을 거친 빠른 닫기.
     if (skipConfirm) { closeAndTerminate(); return; }
@@ -446,7 +470,7 @@ function App() {
       confirmText: t('closeTab') || 'Close tab',
       onConfirm: closeAndTerminate,
     });
-  }, [tabs, t, hosts, settings.defaultMultiplexer, computePaneTmuxSession, killRemoteTmuxSession]);
+  }, [tabs, t, getCloseTargetOptions, getTabCloseIdentity, killRemoteTmuxSession, commitWorkspaceTabs]);
 
   useEffect(() => { closeTabRef.current = closeTab; }, [closeTab]);
 
@@ -675,6 +699,19 @@ function App() {
   }, [tabs, localFolderPicker.open, localFolderPicker.slot, folderPickerSlot]);
   const [confirmModal, setConfirmModal] = useState({ isOpen: false, title: '', message: '', onConfirm: null });
   const [notification, setNotification] = useState({ isOpen: false, message: '' });
+  workspaceConflictModalRef.current = () => setConfirmModal({
+    isOpen: true,
+    title: t('workspaceConflictTitle') || 'Workspace changed elsewhere',
+    message: t('workspaceConflictMessage') || 'Choose which tab layout to keep before ending any sessions.',
+    confirmText: t('keepThisDevice') || 'Keep this device',
+    cancelText: t('decideLater') || 'Decide later',
+    tertiaryText: t('useServerWorkspace') || 'Use server state',
+    onConfirm: keepLocalWorkspace,
+    onTertiary: acceptServerWorkspace,
+  });
+  useEffect(() => {
+    if (workspaceConflict) workspaceConflictModalRef.current();
+  }, [workspaceConflict]);
   const [vncPickerHost, setVncPickerHost] = useState(null);
   /* 이 배포의 로컬 머신이 VNC 를 쓸 수 있는가 — 한 번만 조회해 캐시한다(훅이 모듈
      레벨에 보관하므로 빈 pane 의 EmptyPane 홈도 같은 답을 본다). 컨테이너 배포에서
@@ -928,7 +965,10 @@ function App() {
 
      ⚠️ 훅이므로 아래 early return 들보다 **위**에 있어야 한다. 본문은 그대로 옮겼고,
      useEvent 라 안에서 읽는 값은 항상 최신이다(deps 없음 = stale 아님). */
-  const handleClosePaneImmediate = useEvent((tabId, paneId) => closePane(tabId, paneId, { skipConfirm: true }));
+  const handleClosePaneImmediate = useEvent((tabId, paneId, expectedIdentity) => closePane(tabId, paneId, {
+    skipConfirm: true,
+    expectedIdentity,
+  }));
   const handleSplitPane = useEvent((tabId, paneId, dir) => splitActivePane(dir, tabId, paneId));
   const handleDropTabToPane = useEvent((sourceTabId, targetTabId, targetPaneId, dir) => dropTabToSplitPane(sourceTabId, targetTabId, targetPaneId, dir));
   const handleDuplicateTab = useEvent((tabId) => {
@@ -1223,7 +1263,8 @@ function App() {
         }}
         onSelect={setActiveTabId}
         onClose={closeTab}
-        onCloseImmediate={(tabId) => closeTab(tabId, { skipConfirm: true })}
+        onCloseImmediate={(tabId, expectedIdentity) => closeTab(tabId, { skipConfirm: true, expectedIdentity })}
+        getCloseIdentity={getTabCloseIdentity}
         onHome={() => setActiveTabId(null)}
         onOpenHosts={() => setHostManagerOpen(true)}
         onOpenKeys={() => { setEditingKey(null); setKeyManagerOpen(true); }}
@@ -1395,6 +1436,7 @@ function App() {
                     onFocusPane={focusPane}
                     onClosePane={closePane}
                     onClosePaneImmediate={handleClosePaneImmediate}
+                    getPaneCloseIdentity={getPaneCloseIdentity}
                     onActivatePane={activatePane}
                     onExtractPaneToTab={extractPaneToTab}
                     onReorderPane={reorderPane}

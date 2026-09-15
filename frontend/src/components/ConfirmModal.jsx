@@ -30,6 +30,13 @@ const ConfirmModal = ({
   const headerLabel = title || t('confirm');
 
   return (
+    <>
+    <style>{`
+      @media (max-width: 520px) {
+        .iterm-confirm-modal-actions { flex-direction: column; align-items: stretch !important; }
+        .iterm-confirm-modal-actions > button { width: 100%; margin-right: 0 !important; }
+      }
+    `}</style>
     <GlassModal
       isOpen={isOpen}
       onClose={onCancel}
@@ -47,7 +54,7 @@ const ConfirmModal = ({
               {tertiaryText || ''}
             </Button>
           )}
-          <Button variant="secondary" onClick={onCancel}>
+          <Button variant="secondary" onClick={onCancel} initialFocus>
             {cancelText || t('cancel')}
           </Button>
           <Button variant={danger ? 'danger' : 'primary'} onClick={onConfirm}>
@@ -56,9 +63,11 @@ const ConfirmModal = ({
         </>
       )}
       footerStyle={styles.footer}
+      footerClassName="iterm-confirm-modal-actions"
     >
       <div style={styles.message}>{message}</div>
     </GlassModal>
+    </>
   );
 };
 
@@ -74,6 +83,8 @@ const styles = {
     color: color.subtext,
     lineHeight: 1.5,
     whiteSpace: 'pre-line',
+    wordBreak: 'keep-all',
+    overflowWrap: 'break-word',
   },
   footer: {
     display: 'flex',

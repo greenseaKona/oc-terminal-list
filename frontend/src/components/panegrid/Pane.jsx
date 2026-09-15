@@ -20,6 +20,7 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { buildItlHandle, itlHandleLabel } from '../../utils/itlHandle';
 import { EINK_THEME_ID } from '../../utils/einkMode';
 import useEvent from '../../hooks/useEvent';
+import { paneCloseIdentity } from '../../utils/confirmedClose';
 import {
   TMUX, fromHost as multiplexerFromHost, normalize as normalizeMultiplexer,
 } from '../../utils/multiplexer';
@@ -46,6 +47,7 @@ const Pane = ({
   onPaneDragToSplit = null,
   onDropTabToPane = null,
   onCloseImmediate = null,
+  getCloseIdentity = paneCloseIdentity,
   onEqualizePane = null,
   reloadSignal = 0,
   isBroadcasting = false,
@@ -123,7 +125,7 @@ const Pane = ({
   const [paneDragZone, setPaneDragZone] = useState(null); // zone for pane-to-pane drag preview
   const paneDragZoneRef = useRef(null);
   const [isDragTargeted, setIsDragTargeted] = useState(false); // show overlay above xterm canvas during any pane/tab drag
-  const [pendingClose, setPendingClose] = useState(false);
+  const [pendingCloseIdentity, setPendingCloseIdentity] = useState(null);
   const paneCount = tab?.panes?.length || 1;
 
   /** Parse pane drag payload from custom MIME or text/plain fallback.
@@ -692,7 +694,9 @@ const Pane = ({
           onRestartSession={isEmpty || !onRestartPane ? null : () => onRestartPane(pane.id)}
           onRestartSessionAtPath={isEmpty || !onRestartPaneAtPath ? null : () => onRestartPaneAtPath(pane.id)}
           onRefreshCwd={refreshPaneCwd}
-          onCloseTerminal={(isEmpty || paneCount <= 1) ? onClose : () => setPendingClose(true)}
+          onCloseTerminal={(isEmpty || paneCount <= 1) ? onClose : () => {
+            setPendingCloseIdentity(getCloseIdentity(tab, pane, paneIndex));
+          }}
           settings={settings}
           updateSettings={updateSettings}
           paneThemeId={effectiveThemeId}
@@ -870,9 +874,9 @@ const Pane = ({
       </div>
 
       {/* 패널 닫기 확인 — 글래스모피즘 오버레이 카드 */}
-      {pendingClose && (
+      {pendingCloseIdentity && (
         <div
-          onClick={() => setPendingClose(false)}
+          onClick={() => setPendingCloseIdentity(null)}
           style={{
             position: 'absolute', inset: 0,
             zIndex: 30,
@@ -918,7 +922,7 @@ const Pane = ({
             <div style={{ display: 'flex', gap: space['2'], width: '100%' }}>
               <button
                 type="button"
-                onClick={() => setPendingClose(false)}
+                onClick={() => setPendingCloseIdentity(null)}
                 style={{
                   flex: 1, height: '32px', borderRadius: '7px',
                   border: `1px solid var(--ui-border, ${color.border})`,
@@ -936,7 +940,11 @@ const Pane = ({
               </button>
               <button
                 type="button"
-                onClick={() => { setPendingClose(false); onCloseImmediate?.(); }}
+                onClick={() => {
+                  const identity = pendingCloseIdentity;
+                  setPendingCloseIdentity(null);
+                  onCloseImmediate?.(identity);
+                }}
                 style={{
                   flex: 1, height: '32px', borderRadius: '7px',
                   border: `1px solid color-mix(in srgb, var(--ui-danger, ${color.danger}) 60%, transparent)`,

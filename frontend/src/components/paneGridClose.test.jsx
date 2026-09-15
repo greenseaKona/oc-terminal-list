@@ -34,10 +34,11 @@ const TAB = {
 const propsFor = (paneId) => seen.filter((p) => p.pane?.id === paneId).at(-1);
 
 describe('PaneGrid → Pane 닫기 배선', () => {
-  let onClosePane; let onFocusPane; let onActivatePane;
+  let onClosePane; let onClosePaneImmediate; let onFocusPane; let onActivatePane;
 
   const renderGrid = () => {
     onClosePane = vi.fn();
+    onClosePaneImmediate = vi.fn();
     onFocusPane = vi.fn();
     onActivatePane = vi.fn();
     return render(
@@ -45,6 +46,7 @@ describe('PaneGrid → Pane 닫기 배선', () => {
         tab={TAB}
         settings={{ theme: 'catppuccin', fontSize: 12 }}
         onClosePane={onClosePane}
+        onClosePaneImmediate={onClosePaneImmediate}
         onFocusPane={onFocusPane}
         onActivatePane={onActivatePane}
         t={(k) => k}
@@ -81,6 +83,15 @@ describe('PaneGrid → Pane 닫기 배선', () => {
     });
     act(() => { propsFor('pane-b').onClose(); });
     expect(onClosePane).toHaveBeenCalledWith('tab-1', 'pane-b');
+  });
+
+  it('인라인 확인에서 캡처한 pane identity를 부모까지 보존한다', () => {
+    const identity = JSON.stringify(['pane-a', 'sess-a', '', '', '', '']);
+    renderGrid();
+
+    act(() => { propsFor('pane-a').onCloseImmediate(identity); });
+
+    expect(onClosePaneImmediate).toHaveBeenCalledWith('tab-1', 'pane-a', identity);
   });
 
   it('포커스·활성화도 같은 pane 을 가리킨다', () => {

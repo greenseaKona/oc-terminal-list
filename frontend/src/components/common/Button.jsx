@@ -51,6 +51,7 @@ const Button = ({
   title,
   icon: Icon,
   fullWidth = false,
+  initialFocus = false,
   type = 'button',
 }) => {
   const v = variantStyle[variant] || variantStyle.secondary;
@@ -70,7 +71,6 @@ const Button = ({
     opacity: disabled ? 0.45 : 1,
     width: fullWidth ? '100%' : (size === 'icon' ? s.width : 'auto'),
     userSelect: 'none',
-    outline: 'none',
     ...v,
     ...s,
     ...style,
@@ -86,6 +86,7 @@ const Button = ({
       disabled={disabled}
       style={baseStyle}
       title={title}
+      data-modal-initial-focus={initialFocus || undefined}
       onMouseEnter={(e) => {
         if (disabled) return;
         // Filled variants dim; outlined ones have no fill to dim, so they

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  closePlanIdentity,
   paneCloseIdentity,
   resolveConfirmedPane,
   resolveConfirmedTab,
@@ -29,5 +30,17 @@ describe('confirmed close target resolution', () => {
     const current = { ...original, name: 'renamed' };
 
     expect(resolveConfirmedTab([current], 't1', tabCloseIdentity(original))).toBe(current);
+  });
+
+  it('rejects confirmation when a derived remote termination target changes', () => {
+    const original = paneCloseIdentity({ id: 'p1', hostId: 'h1', mode: 'terminal' });
+    const before = closePlanIdentity(original, {
+      localSessionIds: [], remoteSessions: [{ hostId: 'h1', session: 'mobile-old_2' }],
+    });
+    const after = closePlanIdentity(original, {
+      localSessionIds: [], remoteSessions: [{ hostId: 'h1', session: 'mobile-new_2' }],
+    });
+
+    expect(after).not.toBe(before);
   });
 });

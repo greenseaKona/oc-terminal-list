@@ -29,14 +29,57 @@ const GlassModal = ({
   titleStyle = null,
   bodyStyle = null,
   footerStyle = null,
+  footerClassName = null,
   closeTitle = 'Close',
 }) => {
   const vv = useVisualViewport(isOpen);
+  const panelRef = useRef(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   // 오버레이가 열린 시각 — backdrop 클릭이 진짜 사용자 의도인지(유예 이후) ghost-click 인지 구분.
   const openedAtRef = useRef(0);
   useEffect(() => {
     if (isOpen) openedAtRef.current = Date.now();
+  }, [isOpen]);
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const previouslyFocused = document.activeElement;
+    const panel = panelRef.current;
+    const actionSelector = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    const actions = () => Array.from(panel?.querySelectorAll(actionSelector) || []);
+    const initialAction = panel?.querySelector('[data-modal-initial-focus]:not([disabled])');
+    const fallbackAction = panel?.querySelector('button:not([disabled]):not([data-modal-dismiss]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    (initialAction || fallbackAction || panel)?.focus();
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onCloseRef.current?.();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = actions();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        panel?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      previouslyFocused?.focus?.();
+    };
   }, [isOpen]);
   const handleOverlayClick = () => {
     if (Date.now() - openedAtRef.current < OVERLAY_DISMISS_GRACE_MS) return;
@@ -55,9 +98,12 @@ const GlassModal = ({
   return (
     <div data-testid="glass-modal-overlay" style={overlayStyle} onClick={handleOverlayClick} role="presentation">
       <div
+        ref={panelRef}
         className="iterm-glass-modal"
         role="dialog"
+        aria-modal="true"
         aria-label={ariaLabel || (typeof title === 'string' ? title : 'Dialog')}
+        tabIndex={-1}
         style={{
           ...styles.panel,
           width,
@@ -73,13 +119,13 @@ const GlassModal = ({
             {TitleIcon && <TitleIcon size={14} strokeWidth={1.8} style={{ flexShrink: 0 }} />}
             {title}
           </div>
-          <button onClick={onClose} title={closeTitle} aria-label={closeTitle} style={styles.closeBtn}>
+          <button data-modal-dismiss onClick={onClose} title={closeTitle} aria-label={closeTitle} style={styles.closeBtn}>
             <X size={14} strokeWidth={2} />
           </button>
         </header>
         {afterHeader}
         <div style={{ ...styles.body, ...bodyStyle }}>{children}</div>
-        {footer && <footer style={{ ...styles.footer, ...footerStyle }}>{footer}</footer>}
+        {footer && <footer className={footerClassName || undefined} style={{ ...styles.footer, ...footerStyle }}>{footer}</footer>}
       </div>
     </div>
   );

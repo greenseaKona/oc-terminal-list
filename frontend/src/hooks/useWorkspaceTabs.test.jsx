@@ -25,13 +25,17 @@ class FakeEventSource {
 }
 
 const setupFetch = (initialServerState) => {
-  const calls = { put: [], state: initialServerState };
+  const calls = { getResponses: [], put: [], putResponses: [], state: initialServerState };
   global.fetch = vi.fn(async (url, options = {}) => {
     if (url === '/api/tab-state' && options.method === 'PUT') {
       calls.put.push(JSON.parse(options.body));
+      if (calls.putResponses.length > 0) return calls.putResponses.shift();
       return { ok: true, status: 200, json: async () => ({ status: 'saved', updatedAt: `v${calls.put.length}` }) };
     }
-    if (url === '/api/tab-state') return { ok: true, status: 200, json: async () => calls.state };
+    if (url === '/api/tab-state') {
+      if (calls.getResponses.length > 0) return calls.getResponses.shift();
+      return { ok: true, status: 200, json: async () => calls.state };
+    }
     if (url === '/api/sessions') return { ok: true, status: 200, json: async () => [] };
     if (url.startsWith('/api/sse-ticket')) return { ok: true, status: 200, json: async () => ({ ticket: 't' }) };
     return { ok: true, status: 200, json: async () => ({}) };
@@ -90,6 +94,177 @@ describe('useWorkspaceTabs 서버 동기화', () => {
     expect(calls.put).toHaveLength(1);
   });
 
+  it('파괴적 닫기용 즉시 CAS가 충돌하면 로컬 상태를 유지하고 종료를 잠근다', async () => {
+    const calls = setupFetch({ tabs: [tab('a')], activeTabId: 'a', updatedAt: 'v0' });
+    const { result } = renderHook(() => useWorkspaceTabs({ isAuthenticated: true }));
+    await waitFor(() => expect(result.current.isRestoringWorkspace).toBe(false));
+    calls.putResponses.push({
+      ok: false,
+      status: 409,
+      json: async () => ({ current: { tabs: [tab('a'), tab('remote')], updatedAt: 'v1' } }),
+    });
+
+    let committed;
+    await act(async () => { committed = await result.current.commitWorkspaceTabs([], null); });
+
+    expect(committed).toBe(false);
+    expect(calls.put).toHaveLength(1);
+    expect(result.current.tabs.map((item) => item.id)).toEqual(['a']);
+    expect(result.current.workspaceConflict.current.updatedAt).toBe('v1');
+    expect(result.current.canTerminateSessions).toBe(false);
+  });
+
+  it('파괴적 닫기용 즉시 CAS가 성공하면 상태를 적용하고 debounce PUT을 만들지 않는다', async () => {
+    const calls = setupFetch({ tabs: [tab('a')], activeTabId: 'a', updatedAt: 'v0' });
+    const { result } = renderHook(() => useWorkspaceTabs({ isAuthenticated: true }));
+    await waitFor(() => expect(result.current.isRestoringWorkspace).toBe(false));
+
+    let committed;
+    await act(async () => { committed = await result.current.commitWorkspaceTabs([], null); });
+    await flushSave();
+
+    expect(committed).toBe(true);
+    expect(calls.put).toHaveLength(1);
+    expect(calls.put[0].ifMatch).toBe('v0');
+    expect(calls.put[0].tabs).toEqual([]);
+    expect(result.current.tabs).toEqual([]);
+    expect(result.current.activeTabId).toBeNull();
+  });
+
+  it('저장 충돌이 나면 로컬 탭을 덮지 않고 세션 종료를 잠근다', async () => {
+    const calls = setupFetch({ tabs: [tab('a')], activeTabId: 'a', updatedAt: 'v0' });
+    const { result } = renderHook(() => useWorkspaceTabs({ isAuthenticated: true }));
+    await waitFor(() => expect(result.current.isRestoringWorkspace).toBe(false));
+    calls.putResponses.push({
+      ok: false,
+      status: 409,
+      json: async () => ({ current: { tabs: [tab('a'), tab('remote')], updatedAt: 'remote-1' } }),
+    });
+
+    act(() => result.current.setTabs((prev) => [...prev, tab('local')]));
+    await flushSave();
+
+    expect(result.current.tabs.map((item) => item.id)).toEqual(['a', 'local']);
+    expect(result.current.workspaceConflict).toBeTruthy();
+    expect(result.current.canTerminateSessions).toBe(false);
+  });
+
+  it('저장 충돌에서 서버 상태를 선택하면 그 스냅샷을 적용한다', async () => {
+    const calls = setupFetch({ tabs: [tab('a')], activeTabId: 'a', updatedAt: 'v0' });
+    const { result } = renderHook(() => useWorkspaceTabs({ isAuthenticated: true }));
+    await waitFor(() => expect(result.current.isRestoringWorkspace).toBe(false));
+    calls.putResponses.push({
+      ok: false,
+      status: 409,
+      json: async () => ({ current: { tabs: [tab('a'), tab('remote')], updatedAt: 'remote-1' } }),
+    });
+    act(() => result.current.setTabs((prev) => [...prev, tab('local')]));
+    await flushSave();
+
+    await act(async () => result.current.acceptServerWorkspace());
+
+    expect(result.current.tabs.map((item) => item.id)).toEqual(['a', 'remote']);
+    expect(result.current.workspaceConflict).toBeNull();
+    expect(result.current.canTerminateSessions).toBe(true);
+  });
+
+  it('저장 충돌에서 빈 서버 상태를 선택하면 홈으로 이동하고 종료 잠금을 푼다', async () => {
+    const calls = setupFetch({ tabs: [tab('a')], activeTabId: 'a', updatedAt: 'v0' });
+    const { result } = renderHook(() => useWorkspaceTabs({ isAuthenticated: true }));
+    await waitFor(() => expect(result.current.isRestoringWorkspace).toBe(false));
+    calls.putResponses.push({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        current: { tabs: [], activeTabId: null, nextTabAddressNumber: 4, updatedAt: 'remote-empty' },
+      }),
+    });
+    act(() => result.current.setTabs((prev) => [...prev, tab('local')]));
+    await flushSave();
+
+    await act(async () => result.current.acceptServerWorkspace());
+    await flushSave();
+
+    expect(result.current.tabs).toEqual([]);
+    expect(result.current.activeTabId).toBeNull();
+    expect(result.current.workspaceConflict).toBeNull();
+    expect(result.current.canTerminateSessions).toBe(true);
+    expect(calls.put).toHaveLength(1);
+  });
+
+  it('저장 충돌에서 현재 기기를 선택하면 최신 버전으로 한 번 다시 저장한다', async () => {
+    const calls = setupFetch({ tabs: [tab('a')], activeTabId: 'a', updatedAt: 'v0' });
+    const { result } = renderHook(() => useWorkspaceTabs({ isAuthenticated: true }));
+    await waitFor(() => expect(result.current.isRestoringWorkspace).toBe(false));
+    calls.putResponses.push({
+      ok: false,
+      status: 409,
+      json: async () => ({ current: { tabs: [tab('a'), tab('remote')], updatedAt: 'remote-1' } }),
+    });
+    act(() => result.current.setTabs((prev) => [...prev, tab('local')]));
+    await flushSave();
+
+    act(() => result.current.keepLocalWorkspace());
+    await flushSave();
+
+    expect(calls.put).toHaveLength(2);
+    expect(calls.put[1].tabs.map((item) => item.id)).toEqual(['a', 'local']);
+    expect(calls.put[1].ifMatch).toBe('remote-1');
+    expect(result.current.workspaceConflict).toBeNull();
+    expect(result.current.canTerminateSessions).toBe(true);
+  });
+
+  it('현재 기기 상태는 CAS 재저장이 성공할 때까지 세션 종료 잠금을 유지한다', async () => {
+    const calls = setupFetch({ tabs: [tab('a')], activeTabId: 'a', updatedAt: 'v0' });
+    const { result } = renderHook(() => useWorkspaceTabs({ isAuthenticated: true }));
+    await waitFor(() => expect(result.current.isRestoringWorkspace).toBe(false));
+    calls.putResponses.push({
+      ok: false,
+      status: 409,
+      json: async () => ({ current: { tabs: [tab('a'), tab('remote')], updatedAt: 'remote-1' } }),
+    });
+    act(() => result.current.setTabs((prev) => [...prev, tab('local')]));
+    await flushSave();
+    let resolveRetry;
+    calls.putResponses.push(new Promise((resolve) => { resolveRetry = resolve; }));
+
+    act(() => result.current.keepLocalWorkspace());
+    await flushSave();
+
+    expect(result.current.workspaceConflict).toBeTruthy();
+    expect(result.current.canTerminateSessions).toBe(false);
+    await act(async () => {
+      resolveRetry({ ok: true, status: 200, json: async () => ({ updatedAt: 'local-2' }) });
+      await Promise.resolve();
+    });
+    expect(result.current.workspaceConflict).toBeNull();
+    expect(result.current.canTerminateSessions).toBe(true);
+  });
+
+  it('현재 기기 상태 재저장이 다시 충돌하면 새 서버 버전으로 잠금을 유지한다', async () => {
+    const calls = setupFetch({ tabs: [tab('a')], activeTabId: 'a', updatedAt: 'v0' });
+    const { result } = renderHook(() => useWorkspaceTabs({ isAuthenticated: true }));
+    await waitFor(() => expect(result.current.isRestoringWorkspace).toBe(false));
+    calls.putResponses.push({
+      ok: false,
+      status: 409,
+      json: async () => ({ current: { tabs: [tab('a'), tab('remote')], updatedAt: 'remote-1' } }),
+    });
+    act(() => result.current.setTabs((prev) => [...prev, tab('local')]));
+    await flushSave();
+    calls.putResponses.push({
+      ok: false,
+      status: 409,
+      json: async () => ({ current: { tabs: [tab('a'), tab('newer')], updatedAt: 'remote-2' } }),
+    });
+
+    act(() => result.current.keepLocalWorkspace());
+    await flushSave();
+
+    expect(result.current.workspaceConflict.current.updatedAt).toBe('remote-2');
+    expect(result.current.canTerminateSessions).toBe(false);
+  });
+
   it('서버 high-water mark를 복원해 닫힌 최고 탭 번호를 재사용하지 않는다', async () => {
     const first = { ...tab('a'), addressNumber: 1 };
     const highest = { ...tab('b'), addressNumber: 7 };
@@ -110,6 +285,30 @@ describe('useWorkspaceTabs 서버 동기화', () => {
 
     expect(result.current.tabs.map((item) => item.addressNumber)).toEqual([1, 8]);
     expect(calls.put[0].nextTabAddressNumber).toBe(9);
+  });
+
+  it('오래 열린 닫기 확인도 최신 high-water mark를 되돌리지 않는다', async () => {
+    const first = { ...tab('a'), addressNumber: 1 };
+    const calls = setupFetch({
+      tabs: [first], activeTabId: 'a', nextTabAddressNumber: 2, updatedAt: 'v0',
+    });
+    const { result } = renderHook(() => useWorkspaceTabs({ isAuthenticated: true }));
+    await waitFor(() => expect(result.current.isRestoringWorkspace).toBe(false));
+    const commitFromOpenConfirmation = result.current.commitWorkspaceTabs;
+
+    act(() => result.current.setTabs((prev) => [...prev, tab('b')]));
+    await waitFor(() => expect(result.current.tabs.at(-1).addressNumber).toBe(2));
+    act(() => result.current.setTabs((prev) => prev.filter((item) => item.id !== 'b')));
+    calls.putResponses.push({
+      ok: true,
+      status: 200,
+      json: async () => ({ updatedAt: 'v1', nextTabAddressNumber: 3 }),
+    });
+
+    await act(async () => commitFromOpenConfirmation([first], 'a'));
+    act(() => result.current.setTabs((prev) => [...prev, tab('c')]));
+
+    expect(result.current.tabs.at(-1).addressNumber).toBe(3);
   });
 
   it('복원 시 이 기기가 보던 탭을 유지한다 (다른 기기 활성 탭에 끌려가지 않음)', async () => {
@@ -152,6 +351,123 @@ describe('useWorkspaceTabs 서버 동기화', () => {
     await act(async () => { sseInstances[0].emit({ updatedAt: 'remote-2' }); });
     await flushSave();
     expect(calls.put).toHaveLength(0);
+  });
+
+  it('진행 중이던 SSE 조회보다 저장 충돌이 늦게 확정돼도 로컬 탭을 유지한다', async () => {
+    const calls = setupFetch({ tabs: [tab('a')], activeTabId: 'a', updatedAt: 'v0' });
+    const { result } = renderHook(() => useWorkspaceTabs({ isAuthenticated: true }));
+    await waitFor(() => expect(result.current.isRestoringWorkspace).toBe(false));
+    await waitFor(() => expect(sseInstances).toHaveLength(1));
+    let resolveSseFetch;
+    calls.getResponses.push(new Promise((resolve) => { resolveSseFetch = resolve; }));
+    calls.putResponses.push({
+      ok: false,
+      status: 409,
+      json: async () => ({ current: { tabs: [tab('a'), tab('server')], updatedAt: 'server-2' } }),
+    });
+
+    act(() => sseInstances[0].emit({ updatedAt: 'server-1' }));
+    await act(async () => Promise.resolve());
+    act(() => result.current.setTabs((prev) => [...prev, tab('local')]));
+    await flushSave();
+    await act(async () => {
+      resolveSseFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ tabs: [tab('a'), tab('stale')], updatedAt: 'server-1' }),
+      });
+      await Promise.resolve();
+    });
+
+    expect(result.current.tabs.map((item) => item.id)).toEqual(['a', 'local']);
+    expect(result.current.workspaceConflict).toBeTruthy();
+    expect(result.current.canTerminateSessions).toBe(false);
+  });
+
+  it('로컬 PUT 성공 전에 시작한 SSE 응답은 성공 뒤에도 적용하지 않는다', async () => {
+    const calls = setupFetch({ tabs: [tab('a')], activeTabId: 'a', updatedAt: 'v0' });
+    const { result } = renderHook(() => useWorkspaceTabs({ isAuthenticated: true }));
+    await waitFor(() => expect(result.current.isRestoringWorkspace).toBe(false));
+    await waitFor(() => expect(sseInstances).toHaveLength(1));
+    let resolveSseFetch;
+    calls.getResponses.push(new Promise((resolve) => { resolveSseFetch = resolve; }));
+    act(() => sseInstances[0].emit({ updatedAt: 'server-stale' }));
+    await act(async () => Promise.resolve());
+
+    act(() => result.current.setTabs((prev) => [...prev, tab('local')]));
+    await flushSave();
+    await act(async () => {
+      resolveSseFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ tabs: [tab('a'), tab('stale')], updatedAt: 'server-stale' }),
+      });
+      await Promise.resolve();
+    });
+
+    expect(result.current.tabs.map((item) => item.id)).toEqual(['a', 'local']);
+  });
+
+  it('충돌 전에 시작한 SSE 응답은 빈 서버 상태를 선택한 뒤 적용하지 않는다', async () => {
+    const calls = setupFetch({ tabs: [tab('a')], activeTabId: 'a', updatedAt: 'v0' });
+    const { result } = renderHook(() => useWorkspaceTabs({ isAuthenticated: true }));
+    await waitFor(() => expect(result.current.isRestoringWorkspace).toBe(false));
+    await waitFor(() => expect(sseInstances).toHaveLength(1));
+    let resolveSseFetch;
+    calls.getResponses.push(new Promise((resolve) => { resolveSseFetch = resolve; }));
+    calls.putResponses.push({
+      ok: false,
+      status: 409,
+      json: async () => ({ current: { tabs: [], activeTabId: null, updatedAt: 'remote-empty' } }),
+    });
+    act(() => sseInstances[0].emit({ updatedAt: 'server-stale' }));
+    await act(async () => Promise.resolve());
+    act(() => result.current.setTabs((prev) => [...prev, tab('local')]));
+    await flushSave();
+
+    await act(async () => result.current.acceptServerWorkspace());
+    await act(async () => {
+      resolveSseFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ tabs: [tab('a'), tab('stale')], updatedAt: 'server-stale' }),
+      });
+      await Promise.resolve();
+    });
+
+    expect(result.current.tabs).toEqual([]);
+  });
+
+  it('충돌 전에 시작한 SSE 응답은 현재 기기 상태 재저장 성공 뒤 적용하지 않는다', async () => {
+    const calls = setupFetch({ tabs: [tab('a')], activeTabId: 'a', updatedAt: 'v0' });
+    const { result } = renderHook(() => useWorkspaceTabs({ isAuthenticated: true }));
+    await waitFor(() => expect(result.current.isRestoringWorkspace).toBe(false));
+    await waitFor(() => expect(sseInstances).toHaveLength(1));
+    let resolveSseFetch;
+    calls.getResponses.push(new Promise((resolve) => { resolveSseFetch = resolve; }));
+    calls.putResponses.push({
+      ok: false,
+      status: 409,
+      json: async () => ({ current: { tabs: [tab('a'), tab('remote')], updatedAt: 'remote-1' } }),
+    });
+    act(() => sseInstances[0].emit({ updatedAt: 'server-stale' }));
+    await act(async () => Promise.resolve());
+    act(() => result.current.setTabs((prev) => [...prev, tab('local')]));
+    await flushSave();
+
+    act(() => result.current.keepLocalWorkspace());
+    await flushSave();
+    await act(async () => {
+      resolveSseFetch({
+        ok: true,
+        status: 200,
+        json: async () => ({ tabs: [tab('a'), tab('stale')], updatedAt: 'server-stale' }),
+      });
+      await Promise.resolve();
+    });
+
+    expect(result.current.tabs.map((item) => item.id)).toEqual(['a', 'local']);
+    expect(result.current.canTerminateSessions).toBe(true);
   });
 
   it('같은 SSE 연결의 원격 cwd 변경분을 전용 스토어에 적용한다', async () => {

@@ -448,10 +448,36 @@ export const planPaneClose = (tab, paneId, hosts = [], defaultMultiplexer = unde
   };
 };
 
+export const collectPaneCloseTargets = (
+  tab,
+  pane,
+  paneIndex,
+  { hosts = [], defaultMultiplexer = undefined, computePaneTmuxSession } = {},
+) => {
+  const localSessionIds = new Set();
+  const remoteSessions = new Map();
+  if (pane?.sessionId && !pane.hostId) localSessionIds.add(pane.sessionId);
+  if (pane?.hostId && pane.mode !== 'vnc') {
+    const host = hosts.find((candidate) => candidate.id === pane.hostId);
+    const multiplexer = pane.multiplexer
+      ? normalizeMultiplexer(pane.multiplexer)
+      : multiplexerFromHost(host, defaultMultiplexer);
+    if (host && multiplexerPersists(multiplexer)) {
+      const session = computePaneTmuxSession?.(host, tab, pane, paneIndex);
+      if (session) remoteSessions.set(`${pane.hostId}\0${session}`, { hostId: pane.hostId, session });
+    }
+  }
+
+  return {
+    localSessionIds: [...localSessionIds],
+    remoteSessions: [...remoteSessions.values()],
+  };
+};
+
 /** Resolve every terminal session owned by a tab, including tabs with mixed local/remote panes. */
 export const collectTabCloseTargets = (
   tab,
-  { hosts = [], defaultMultiplexer = undefined, computePaneTmuxSession } = {},
+  options = {},
 ) => {
   if (!tab) return { localSessionIds: [], remoteSessions: [] };
   const panes = tab.panes?.length
@@ -461,18 +487,11 @@ export const collectTabCloseTargets = (
   const remoteSessions = new Map();
 
   panes.forEach((pane, paneIndex) => {
-    if (pane.sessionId && !pane.hostId) {
-      localSessionIds.add(pane.sessionId);
-      return;
-    }
-    if (!pane.hostId || pane.mode === 'vnc') return;
-    const host = hosts.find((candidate) => candidate.id === pane.hostId);
-    const multiplexer = pane.multiplexer
-      ? normalizeMultiplexer(pane.multiplexer)
-      : multiplexerFromHost(host, defaultMultiplexer);
-    if (!host || !multiplexerPersists(multiplexer)) return;
-    const session = computePaneTmuxSession?.(host, tab, pane, paneIndex);
-    if (session) remoteSessions.set(`${pane.hostId}\0${session}`, { hostId: pane.hostId, session });
+    const targets = collectPaneCloseTargets(tab, pane, paneIndex, options);
+    targets.localSessionIds.forEach((sessionId) => localSessionIds.add(sessionId));
+    targets.remoteSessions.forEach(({ hostId, session }) => {
+      remoteSessions.set(`${hostId}\0${session}`, { hostId, session });
+    });
   });
 
   return {

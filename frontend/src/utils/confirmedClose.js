@@ -13,6 +13,16 @@ export const tabCloseIdentity = (tab) => JSON.stringify([
   ...(tab?.panes || []).map(paneCloseIdentity),
 ]);
 
+export const closePlanIdentity = (modelIdentity, targets) => JSON.stringify([
+  modelIdentity,
+  [...(targets?.localSessionIds || [])].sort(),
+  [...(targets?.remoteSessions || [])]
+    .map(({ hostId, session }) => [hostId, session])
+    .sort(([hostA, sessionA], [hostB, sessionB]) => (
+      hostA.localeCompare(hostB) || sessionA.localeCompare(sessionB)
+    )),
+]);
+
 export const resolveConfirmedPane = (tabs, tabId, paneId, expectedIdentity) => {
   const tab = tabs.find((item) => item.id === tabId);
   const paneIndex = tab?.panes?.findIndex((pane) => pane.id === paneId) ?? -1;
