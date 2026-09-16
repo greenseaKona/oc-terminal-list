@@ -181,17 +181,19 @@ const DemoApp = () => {
             onOpenHostAtPath={openDemoHost}
             onJumpTab={setActiveTabId}
             tabs={displayedTabs}
-            showUsageStats={false}
-            isVisible={false}
+            showUsageStats
+            isVisible
           />
         )}
         {tabs.map((tab) => (
           <div
             key={tab.id}
+            {...(tab.id !== activeTabId ? { inert: '' } : {})}
             style={{
               position: 'absolute',
               inset: '4px',
               visibility: tab.id === activeTabId ? 'visible' : 'hidden',
+              opacity: tab.id === activeTabId ? 1 : 0,
               pointerEvents: tab.id === activeTabId ? 'auto' : 'none',
             }}
           >
