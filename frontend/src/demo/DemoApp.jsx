@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import TabBar from '../components/TabBar';
+import HomeDashboard from '../components/HomeDashboard';
 import DemoPaneGrid from './DemoPaneGrid';
 import DemoBanner from './DemoBanner';
 import DemoSettingsModal from './DemoSettingsModal';
@@ -14,9 +15,10 @@ import themes, { defaultTheme } from '../styles/themes';
 import { applyThemeVars } from '../styles/themeUI';
 import { tokens } from '../styles/tokens';
 
-const { color, font } = tokens;
+const { color } = tokens;
 
 const nextPoolEntry = (paneCount) => DEMO_PANE_POOL[paneCount % DEMO_PANE_POOL.length];
+const isPhoneViewport = () => window.matchMedia('(max-width: 768px)').matches;
 
 /**
  * Self-contained live-demo shell. Reuses real production pieces — TabBar,
@@ -28,13 +30,21 @@ const nextPoolEntry = (paneCount) => DEMO_PANE_POOL[paneCount % DEMO_PANE_POOL.l
  */
 const DemoApp = () => {
   const [tabs, setTabs] = useState(DEMO_TABS);
-  const [activeTabId, setActiveTabId] = useState(DEMO_TABS[0].id);
+  const [activeTabId, setActiveTabId] = useState(null);
   const [themeId, setThemeId] = useState(defaultTheme);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(isPhoneViewport);
 
   useEffect(() => {
     applyThemeVars(themes[themeId] || themes[defaultTheme]);
   }, [themeId]);
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 768px)');
+    const update = () => setIsMobile(media.matches);
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
 
   const handleReorder = (fromId, toId) => {
     setTabs((prev) => {
@@ -125,12 +135,27 @@ const DemoApp = () => {
     };
   }), [tabs]);
 
+  const demoSettings = useMemo(() => ({
+    theme: themeId,
+    localName: DEMO_LOCAL_SETTINGS.localName,
+    localIcon: DEMO_LOCAL_SETTINGS.localIcon,
+    localColorIndex: DEMO_LOCAL_SETTINGS.localColorIndex,
+    localStartPath: '/home/demo/app',
+  }), [themeId]);
+
+  const openDemoHost = (host) => {
+    const target = host?.isLocal
+      ? tabs.find((tab) => tab.type === 'local')
+      : tabs.find((tab) => tab.hostId === host?.id);
+    if (target) setActiveTabId(target.id);
+  };
+
   return (
     <div style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--ui-base)' }}>
-      <DemoBanner />
       <TabBar
         tabs={displayedTabs}
         activeTabId={activeTabId}
+        isMobile={isMobile}
         onSelect={setActiveTabId}
         onClose={handleClose}
         onCloseImmediate={handleClose}
@@ -141,37 +166,50 @@ const DemoApp = () => {
         onSplit={handleSplit}
         onDuplicate={handleDuplicate}
       />
-      <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+      <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        {activeTabId === null && (
+          <HomeDashboard
+            hosts={DEMO_HOSTS}
+            localCard={{
+              name: DEMO_LOCAL_SETTINGS.localName,
+              icon: DEMO_LOCAL_SETTINGS.localIcon,
+              accent: color.dotPalette[DEMO_LOCAL_SETTINGS.localColorIndex],
+              startPath: demoSettings.localStartPath,
+            }}
+            settings={demoSettings}
+            onOpenHost={openDemoHost}
+            onOpenHostAtPath={openDemoHost}
+            onJumpTab={setActiveTabId}
+            tabs={displayedTabs}
+            showUsageStats={false}
+            isVisible={false}
+          />
+        )}
         {tabs.map((tab) => (
           <div
             key={tab.id}
             style={{
               position: 'absolute',
               inset: '4px',
-              display: tab.id === activeTabId ? 'block' : 'none',
+              visibility: tab.id === activeTabId ? 'visible' : 'hidden',
+              pointerEvents: tab.id === activeTabId ? 'auto' : 'none',
             }}
           >
             <DemoPaneGrid
               node={tab.splitTree}
+              panes={tab.panes || []}
               panesById={Object.fromEntries((tab.panes || []).map((p) => [p.id, p]))}
               activePaneId={tab.activePaneId}
               onSelectPane={(paneId) => handleSelectPane(tab.id, paneId)}
+              isMobile={isMobile}
+              hosts={DEMO_HOSTS}
+              settings={demoSettings}
+              tabColorIndex={tab.color_index}
             />
           </div>
         ))}
       </div>
-      <div
-        style={{
-          padding: '4px 12px',
-          fontFamily: font.mono,
-          fontSize: '10px',
-          color: color.muted,
-          borderTop: '1px solid var(--ui-border)',
-          flexShrink: 0,
-        }}
-      >
-        Terminal List — {DEMO_HOSTS.length} sample hosts connected · right-click a tab to split/duplicate · this playback loops automatically
-      </div>
+      <DemoBanner />
       <DemoSettingsModal
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}

@@ -10,9 +10,9 @@
  */
 
 export const DEMO_HOSTS = [
-  { id: 'demo-web', name: 'web-app-01', icon: 'Server', color_index: 4 },
-  { id: 'demo-db', name: 'cache-redis-01', icon: 'Database', color_index: 2 },
-  { id: 'demo-edge', name: 'edge-node-pi', icon: 'Cpu', color_index: 36 },
+  { id: 'demo-web', name: 'web-app-01', icon: 'Server', color_index: 4, ssh_user: 'demo', hostname: 'web.demo.internal', start_path: '/srv/web' },
+  { id: 'demo-db', name: 'cache-redis-01', icon: 'Database', color_index: 2, ssh_user: 'demo', hostname: 'cache.demo.internal', start_path: '/var/lib/redis' },
+  { id: 'demo-edge', name: 'edge-node-pi', icon: 'Cpu', color_index: 36, ssh_user: 'demo', hostname: 'edge.demo.internal', start_path: '/home/demo' },
 ];
 
 // 새 pane 을 split/duplicate 할 때 순환시키는 풀 — local 워크스페이스와 3개 호스트를 오간다.
