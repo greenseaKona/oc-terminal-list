@@ -112,7 +112,6 @@
         linear-gradient(90deg, var(--border) 1px, transparent 1px);
       background-size: 56px 56px;
       mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 30%, transparent 100%);
-      animation: grid-drift 22s linear infinite;
     }
     @keyframes grid-drift { to { background-position: 56px 56px, 56px 56px; } }
 
@@ -121,19 +120,16 @@
       width: 700px; height: 500px;
       background: radial-gradient(circle, rgba(137,180,250,.09), transparent 65%);
       top: -80px; left: 50%; transform: translateX(-50%);
-      animation: orb1 10s ease-in-out infinite;
     }
     .orb-2 {
       width: 450px; height: 450px;
       background: radial-gradient(circle, rgba(203,166,247,.07), transparent 65%);
       bottom: 0; right: -80px;
-      animation: orb2 14s ease-in-out infinite;
     }
     .orb-3 {
       width: 350px; height: 350px;
       background: radial-gradient(circle, rgba(166,227,161,.06), transparent 65%);
       bottom: 80px; left: -60px;
-      animation: orb2 11s ease-in-out infinite 2s;
     }
     @keyframes orb1 { 0%,100%{transform:translateX(-50%) translateY(0)} 50%{transform:translateX(-50%) translateY(-28px)} }
     @keyframes orb2 { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-18px)} }
@@ -150,7 +146,7 @@
       border: 1px solid; border-radius: 999px;
       padding: .3rem .95rem; white-space: nowrap;
     }
-    .tag-chip .tag-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; animation: pulse-dot 2.4s ease infinite; }
+    .tag-chip .tag-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
     .tag-chip.tag-blue  { color: var(--accent); border-color: var(--accent32); background: var(--accent12); }
     .tag-chip.tag-green { color: var(--green);  border-color: rgba(166,227,161,.28); background: rgba(166,227,161,.07); }
     .tag-chip.tag-mauve { color: var(--mauve);  border-color: rgba(203,166,247,.28); background: rgba(203,166,247,.07); }
@@ -232,7 +228,11 @@
     }
     .scroll-cue:hover { color: var(--accent); }
     @keyframes scroll-cue-bounce { 0%,100%{transform:translateX(-50%) translateY(0)} 50%{transform:translateX(-50%) translateY(8px)} }
-    @media (prefers-reduced-motion: reduce) { .scroll-cue { animation: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+      .reveal { opacity: 1; transform: none; }
+    }
 
     /* ════ Stats ════ */
     .stats-strip {
@@ -257,6 +257,11 @@
       font-family: var(--font-mono); font-size: .65rem; font-weight: 700;
       letter-spacing: .15em; text-transform: uppercase;
       color: var(--accent); text-align: center; margin-bottom: .6rem;
+      display: flex; align-items: center; justify-content: center; gap: .45rem;
+    }
+    .section-title-icon {
+      width: 15px; height: 15px; padding: 2px; border-radius: 4px;
+      color: var(--accent); background: var(--accent12); border: 1px solid var(--accent32);
     }
     .section-h2 {
       font-size: 1.8rem; font-weight: 800; text-align: center; margin-bottom: 3rem;
@@ -346,7 +351,7 @@
     .demo-frame {
       width: 100%; height: 460px; border: 0; display: block; background: #11121a;
     }
-    @media (max-width: 640px) { .demo-frame { height: 340px; } }
+    @media (max-width: 640px) { .demo-frame { height: min(70dvh, 580px); min-height: 500px; } }
 
     /* ════ Feature Spotlights ════ */
     .spotlight {
@@ -364,7 +369,8 @@
     .spotlight h3 { font-size: 1.4rem; font-weight: 800; margin-bottom: .7rem; letter-spacing: -.01em; }
     .spotlight p { color: var(--subtext); font-size: .9rem; line-height: 1.7; }
     @media (max-width: 760px) {
-      .spotlight, .spotlight.reverse { flex-direction: column; }
+      .spotlight, .spotlight.reverse { flex-direction: column; gap: 1rem; padding: 1.5rem 0; }
+      .spotlight-text, .spotlight-visual { flex: none; width: 100%; min-width: 0; }
     }
 
     /* mock terminal chrome shared by spotlight visuals — same language as .browser-frame */
@@ -387,7 +393,7 @@
       font-size: .68rem; padding: .15rem .55rem; border-radius: 999px;
       background: rgba(166,227,161,.12); color: var(--green); border: 1px solid rgba(166,227,161,.28);
     }
-    .mock-session-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); animation: pulse-dot 2.4s ease infinite; }
+    .mock-session-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
 
     /* split-pane mockup */
     .mock-split { display: flex; gap: 3px; padding: 3px; height: 190px; }
@@ -501,7 +507,38 @@
     .footer-links a { color: var(--muted); display:flex;align-items:center;gap:.3rem; transition: color .15s; }
     .footer-links a:hover { color: var(--accent); text-decoration: none; }
 
-    @media (max-width: 640px) { .nav-links .hide-mobile{display:none} .stats-strip{gap:1.5rem} .hero-h1{font-size:2rem} }
+    @media (max-width: 640px) {
+      nav { height: 54px; padding: 0 1rem; }
+      .nav-links .hide-mobile { display: none; }
+      .hero-section { min-height: auto; padding: 88px 1rem 48px; }
+      .hero-tags { gap: .35rem; margin-bottom: 1.25rem; }
+      .tag-chip { padding: .25rem .65rem; font-size: .64rem; }
+      .hero-h1 { font-size: 2rem; margin-bottom: 1rem; }
+      .hero-sub { font-size: .92rem; line-height: 1.65; margin-bottom: 1.5rem; }
+      .btn { padding: .58rem .9rem; font-size: .8rem; }
+      .scroll-cue { display: none; }
+      .stats-strip { gap: 1rem 1.5rem; padding: 1.5rem 1rem; }
+      .stat-num { font-size: 1.15rem; }
+      .section { padding: 3rem 1rem; }
+      .section-h2 { font-size: 1.5rem; margin-bottom: 2rem; }
+      .section-lead { margin: -1.25rem auto 1.4rem !important; font-size: .8rem !important; }
+      .browser-frame { border-radius: 11px; }
+      .browser-chrome { padding: .55rem .7rem; }
+      .feature-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .feature-card { padding: 1rem .85rem; }
+      .feature-icon-wrap { width: 34px; height: 34px; margin-bottom: .65rem; }
+      .feature-card h3 { font-size: .8rem; }
+      .feature-card p { font-size: .72rem; line-height: 1.5; }
+      .theme-grid {
+        grid-template-columns: none; grid-template-rows: repeat(2, auto);
+        grid-auto-flow: column; grid-auto-columns: 112px;
+        overflow-x: auto; overscroll-behavior-inline: contain;
+        padding: 1px 1px .65rem; scrollbar-width: thin;
+      }
+      .theme-more { margin-top: .8rem; }
+      .code-block { padding: 1.1rem .9rem; font-size: .68rem; overflow-x: auto; }
+      footer { padding: 2rem 1rem; }
+    }
   </style>
 </head>
 <body>
@@ -583,9 +620,9 @@
 
 <!-- ════ Live Demo ════ -->
 <section class="section reveal" id="demo">
-  <p class="section-eyebrow" data-i18n="demoEyebrow">Live Demo</p>
+  <p class="section-eyebrow"><svg aria-hidden="true" class="section-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polygon points="6 3 20 12 6 21 6 3"/></svg><span data-i18n="demoEyebrow">Live Demo</span></p>
   <h2 class="section-h2" data-i18n="demoH2">Try it right now — no install</h2>
-  <p style="text-align:center;color:var(--subtext);font-size:.88rem;margin:-2rem auto 2rem;max-width:540px" data-i18n="demoSub">
+  <p class="section-lead" style="text-align:center;color:var(--subtext);font-size:.88rem;margin:-2rem auto 2rem;max-width:540px" data-i18n="demoSub">
     Scripted playback with sample hosts. Nothing below is a real server — no signup, no real shell, no data leaves your browser.
   </p>
   <div class="browser-frame">
@@ -700,7 +737,7 @@
 
 <!-- ════ Features ════ -->
 <section class="section reveal" id="features">
-  <p class="section-eyebrow" data-i18n="featEyebrow">Features</p>
+  <p class="section-eyebrow"><svg aria-hidden="true" class="section-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg><span data-i18n="featEyebrow">Features</span></p>
   <h2 class="section-h2" data-i18n="featH2">Everything you need</h2>
   <div class="feature-grid" id="featureGrid">
 
@@ -783,9 +820,9 @@
 
 <!-- ════ Themes ════ -->
 <section class="section reveal" id="themes">
-  <p class="section-eyebrow" data-i18n="themesEyebrow">Theming</p>
+  <p class="section-eyebrow"><svg aria-hidden="true" class="section-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/><path d="M12 2a10 10 0 0 0 0 20c1.1 0 2-.9 2-2 0-.5-.2-.9-.5-1.3-.3-.4-.5-.8-.5-1.2 0-.8.7-1.5 1.5-1.5H17a5 5 0 0 0 5-5c0-5-4.5-9-10-9Z"/></svg><span data-i18n="themesEyebrow">Theming</span></p>
   <h2 class="section-h2" data-i18n="themesH2">52 built-in themes</h2>
-  <p style="text-align:center;color:var(--subtext);font-size:.88rem;margin:-2rem auto 2rem;max-width:560px" data-i18n="themesSub">
+  <p class="section-lead" style="text-align:center;color:var(--subtext);font-size:.88rem;margin:-2rem auto 2rem;max-width:560px" data-i18n="themesSub">
     Every terminal pane can run its own theme independently. Switching is instant — no restart, no reconnect.
   </p>
   <div class="theme-grid" id="themeGrid"></div>
@@ -797,7 +834,7 @@
 <!-- ════ Install ════ -->
 <section class="section reveal" id="install">
   <div class="install-wrap">
-    <p class="section-eyebrow" data-i18n="installEyebrow">Install</p>
+    <p class="section-eyebrow"><svg aria-hidden="true" class="section-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg><span data-i18n="installEyebrow">Install</span></p>
     <h2 class="section-h2" data-i18n="installH2">30-second Setup</h2>
     <p style="color:var(--subtext);font-size:.88rem;margin-bottom:1.5rem" data-i18n="installSub">Default port 38822 — no conflict with common dev ports (3000, 8080, 8888).</p>
 
@@ -964,6 +1001,7 @@ const phrases = {
 };
 
 let currentLang = localStorage.getItem('tl-lang') || 'en';
+const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 function applyLang(lang) {
   currentLang = lang;
@@ -1006,13 +1044,18 @@ function type() {
     setTimeout(type, 42);
   }
 }
-setTimeout(type, 700);
+if (reduceMotion) typeNode.nodeValue = phrases[currentLang][0];
+else setTimeout(type, 700);
 
 /* ── 스크롤 reveal ── */
-const obs = new IntersectionObserver(entries => {
-  entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); obs.unobserve(e.target); } });
-}, { threshold: 0.1 });
-document.querySelectorAll('.reveal').forEach(el => obs.observe(el));
+if (reduceMotion) {
+  document.querySelectorAll('.reveal').forEach(el => { el.classList.add('visible'); });
+} else {
+  const obs = new IntersectionObserver(entries => {
+    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); obs.unobserve(e.target); } });
+  }, { threshold: 0.1 });
+  document.querySelectorAll('.reveal').forEach(el => { obs.observe(el); });
+}
 
 /* ── 숫자 카운터 ── */
 const cObs = new IntersectionObserver(entries => {
@@ -1025,7 +1068,10 @@ const cObs = new IntersectionObserver(entries => {
     cObs.unobserve(el);
   });
 }, { threshold: 0.5 });
-document.querySelectorAll('[data-count]').forEach(el => cObs.observe(el));
+document.querySelectorAll('[data-count]').forEach(el => {
+  if (reduceMotion) { el.textContent = el.dataset.count; }
+  else cObs.observe(el);
+});
 
 /* ── 카드 마우스 glow ── */
 document.querySelectorAll('.feature-card').forEach(card => {
@@ -1041,7 +1087,7 @@ document.querySelectorAll('.feature-card').forEach(card => {
 function showMode(mode, btn) {
   document.getElementById('mode-docker').style.display = mode === 'docker' ? 'block' : 'none';
   document.getElementById('mode-host').style.display   = mode === 'host'   ? 'block' : 'none';
-  document.querySelectorAll('.mode-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.mode-tab').forEach(t => { t.classList.remove('active'); });
   btn.classList.add('active');
 }
 
