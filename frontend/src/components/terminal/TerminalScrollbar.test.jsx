@@ -201,21 +201,22 @@ it('loads Recent commands once while browsing local history', async () => {
   expect(props.inputPreviewRef.current).toBeTypeOf('function');
 });
 
-it('slows background tmux refreshes while e-ink mode is active', async () => {
+it('keeps a slow recurring tmux refresh active in e-ink mode', async () => {
   vi.useFakeTimers();
   document.documentElement.setAttribute('data-eink', '1');
   fetch.mockResolvedValue({ ok: true, json: async () => ({ available: true, history: 200, offset: 60, rows: 20,
     input_context: { text: '질문 B' } }) });
   try {
-    const { listeners } = setup('alternate', false, true);
+    setup('alternate', false, true);
     await act(async () => {});
     expect(fetch).toHaveBeenCalledTimes(1);
 
-    act(() => listeners.write());
     await act(async () => vi.advanceTimersByTimeAsync(999));
     expect(fetch).toHaveBeenCalledTimes(1);
     await act(async () => vi.advanceTimersByTimeAsync(1));
     expect(fetch).toHaveBeenCalledTimes(2);
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(fetch).toHaveBeenCalledTimes(3);
   } finally {
     document.documentElement.removeAttribute('data-eink');
     vi.useRealTimers();

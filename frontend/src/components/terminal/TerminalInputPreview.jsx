@@ -60,7 +60,7 @@ export default function TerminalInputPreview({ xtermRef, inputPreviewRef, ready,
           cursor: canJump ? 'pointer' : 'default' }}>
         <span style={{ display: 'block',
           paddingRight: `calc(${tokens.space['12']} + ${tokens.space['4']})`,
-          color: themeUi.muted }}>{t('terminalContextInput')}</span>
+          color: themeUi.subtext }}>{t('terminalContextInput')}</span>
         <span style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
           display: expanded ? 'block' : '-webkit-box', WebkitBoxOrient: 'vertical',
           WebkitLineClamp: expanded ? 'unset' : 2, overflow: 'hidden' }}>{text}</span>

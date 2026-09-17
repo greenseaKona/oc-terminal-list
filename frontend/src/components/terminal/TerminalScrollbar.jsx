@@ -104,6 +104,9 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
         // rather than accumulating commands behind a slow SSH connection.
         if (!disposed && pending !== null) request();
         else if (!disposed && refreshPending) { refreshPending = false; refresh(); }
+        // A quiet tmux pane can change without emitting an xterm event (for example,
+        // while viewing copy-mode history). Keep one slow background read armed.
+        else if (!disposed) refresh();
       }
     };
     const refresh = () => {

@@ -935,6 +935,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
         tmuxSuffix,
         tmuxSessionName,
         createIfMissing,
+        sessionMeta: !hostId,
         clientId: terminalClientIdRef.current,
         reason: connectReasonRef.current,
         prevMs: prevSocketLivedMsRef.current,
