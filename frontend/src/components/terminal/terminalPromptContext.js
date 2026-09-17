@@ -46,7 +46,7 @@ export function readTerminalPromptContext(term, commands = []) {
       }
       if (text.length >= MAX_INPUT) break;
     }
-    return { text: historyOriginal(text.trimEnd().slice(0, MAX_INPUT), commands),
+    return { offset: buffer.baseY - start, text: historyOriginal(text.trimEnd().slice(0, MAX_INPUT), commands),
       background: cellBackground(term, start, first.length - match[1].length) };
   }
   return null;

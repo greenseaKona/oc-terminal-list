@@ -39,6 +39,9 @@ def scroll_script(base: list[str], session: str, offset: int | None = None, incl
         if offset == 0:
             script += f'[ "$mode" != copy-mode ] || {tmux} send-keys -t "$pane" -X cancel\n'
         else:
+            # Refresh the copy-mode snapshot for an explicit seek. New output
+            # may have grown real history since the previous snapshot froze.
+            script += f'[ "$mode" != copy-mode ] || {tmux} send-keys -t "$pane" -X cancel\n'
             script += f'history=$({tmux} display-message -p -t "$pane" "#{{history_size}}")\n'
             script += 'case "$history" in ""|*[!0-9]*) exit 1;; esac\n'
             script += f'count={int(offset)}; [ "$count" -le "$history" ] || count=$history\n'
@@ -63,7 +66,11 @@ def scroll_script(base: list[str], session: str, offset: int | None = None, incl
         script += '[ "$end" -lt "$rows" ] || end=$((rows-1))\n'
         capture = f'{tmux} capture-pane -p -J -t "$pane" -S "$start"'
         script += f'count=$({capture} -E "$top" | awk \'END {{print NR}}\')\n'
-        script += 'printf "CONTEXT:%s\\n" "$count"\n'
+        # Pair physical rows with joined lines to locate the prompt after reflow.
+        # Ignore whitespace padding introduced by wide-character terminal cells.
+        script += f'raw=$({tmux} capture-pane -p -N -t "$pane" -S "$start" -E "$top" | head -c 1048576)\n'
+        script += 'rawcount=$(printf "%s\\n" "$raw" | awk \'END {print NR}\')\n'
+        script += 'printf "CONTEXT:%s:%s:%s\\n%s\\n" "$count" "$start" "$rawcount" "$raw"\n'
         # Bound output over SSH as well as locally. An incomplete tail fails
         # closed below rather than attributing an answer to an older question.
         script += f'{capture} -E "$end" | head -c 1048576'
@@ -89,7 +96,32 @@ def parse_state(output: str, include_input: bool = False) -> dict:
             if (state["available"] and offset > 0 and len(lines) > 3 and lines[1].startswith("CONTEXT:")
                     and lines[-1] == "CONTEXT-END:" + lines[0]):
                 try:
-                    state["input_context"] = prompt_context(lines[2:-1], int(lines[1][8:]) - 1)
+                    metadata = [int(value) for value in lines[1][8:].split(":")]
+                    top = metadata[0] - 1
+                    raw_count = metadata[2] if len(metadata) == 3 else 0
+                    joined = lines[2 + raw_count:-1]
+                    context = prompt_context(joined, top, include_position=True)
+                    if context:
+                        target = context.pop("line")
+                        if len(metadata) == 3 and raw_count > 0:
+                            physical = lines[2:2 + raw_count]
+                            row = 0
+                            for logical in joined[:target]:
+                                logical = "".join(logical.split())
+                                combined = ""
+                                while row < len(physical):
+                                    combined += "".join(physical[row].split())
+                                    row += 1
+                                    if combined == logical:
+                                        break
+                                else:
+                                    row = len(physical)
+                                    break
+                            if (row < len(physical)
+                                    and "".join(joined[target].split()).startswith("".join(physical[row].split()))
+                                    and physical[row].lstrip().startswith(("› ", "❯ "))):
+                                context["offset"] = min(history, max(0, -metadata[1] - row))
+                        state["input_context"] = context
                 except ValueError:
                     pass
         return state

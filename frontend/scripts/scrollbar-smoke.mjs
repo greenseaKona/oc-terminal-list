@@ -110,8 +110,17 @@ for (const engine of [chromium, webkit]) {
     };
     for (const letter of ['A','B','C','A']) await goToAnswer(letter);
     assert.equal(await preview.evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(60, 64, 72)');
-    await preview.getByRole('button').click();
-    assert.equal(await preview.getByRole('button').getAttribute('aria-expanded'), 'true');
+    await preview.locator('button[aria-expanded]').click();
+    assert.equal(await preview.locator('button[aria-expanded]').getAttribute('aria-expanded'), 'true');
+    const beforeJump = await page.evaluate(() => window.term.buffer.active.viewportY);
+    await preview.locator('button[title]').click();
+    await preview.waitFor({state:'hidden'});
+    assert.ok(await page.evaluate(() => window.term.buffer.active.viewportY) < beforeJump);
+    assert.ok(await page.evaluate(() => {
+      const b = window.term.buffer.active;
+      return b.getLine(b.viewportY).translateToString(true).startsWith('› 질문 A');
+    }), 'Click reveals the original question at the viewport top');
+    await goToAnswer('A');
     await page.screenshot({path:'/tmp/terminal-input-context-'+engine.name()+'.png'});
     await page.locator('#toggle').click();
     assert.equal(await bar.count(),0);

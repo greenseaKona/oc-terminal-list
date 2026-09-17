@@ -7,7 +7,7 @@ CONTROL = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|[\x00-\x08\x0b-\x1f\x7f]")
 MAX_INPUT = 32768
 
 
-def prompt_context(lines: list[str], top: int) -> dict | None:
+def prompt_context(lines: list[str], top: int, *, include_position: bool = False) -> dict | None:
     """Use the last explicit agent prompt at/before the first visible line.
 
     A shell '$' or Markdown '>' in an answer is not evidence of a question.
@@ -26,4 +26,4 @@ def prompt_context(lines: list[str], top: int) -> dict | None:
         text += "\n" + line[2:]
         if len(text) >= MAX_INPUT:
             break
-    return {"text": text[:MAX_INPUT]}
+    return {"text": text[:MAX_INPUT], **({"line": start} if include_position else {})}

@@ -78,18 +78,22 @@ class TmuxPromptContextTest(unittest.TestCase):
                                  ('C', '세 번째 질문'), ('A', self.question_a.rstrip())]:
             with self.subTest(letter=letter):
                 state = self.context(self.offset_for(f'answer {letter} 10'))
-                self.assertEqual(state['input_context'], {'text': expected})
+                self.assertEqual(state['input_context']['text'], expected)
+                self.assertEqual(state['input_context']['offset'], self.offset_for('› ' + expected.split('\n')[0][:8]))
+                jumped = self.context(state['input_context']['offset'])
+                self.assertEqual(jumped['offset'], state['input_context']['offset'])
 
     def test_reload_needs_no_new_input_and_bottom_hides_context(self):
         self.context(self.offset_for('answer B 10'))
-        self.assertEqual(self.context()['input_context'], {'text': '두 번째 질문\n여러 줄 입력'})
+        self.assertEqual(self.context()['input_context']['text'], '두 번째 질문\n여러 줄 입력')
         self.assertIsNone(self.context(0)['input_context'])
 
     def test_reflow_uses_real_history_positions(self):
         self.context(0)
         self.run_tmux('resize-window', '-t', 'history', '-x', '35', '-y', '20')
         state = self.context(self.offset_for('answer A 10'))
-        self.assertEqual(state['input_context'], {'text': self.question_a.rstrip()})
+        self.assertEqual(state['input_context']['text'], self.question_a.rstrip())
+        self.assertEqual(state['input_context']['offset'], self.offset_for('› 첫 질문'))
 
     def test_new_output_does_not_reassign_the_frozen_copy_mode_view(self):
         self.context(self.offset_for('answer B 10'))
@@ -97,7 +101,7 @@ class TmuxPromptContextTest(unittest.TestCase):
         with open(tty, 'w') as stream:
             stream.write('\r\n' + '\r\n'.join(f'new output {i}' for i in range(12)) + '\r\n')
         time.sleep(.05)
-        self.assertEqual(self.context()['input_context'], {'text': '두 번째 질문\n여러 줄 입력'})
+        self.assertEqual(self.context()['input_context']['text'], '두 번째 질문\n여러 줄 입력')
 
 
 if __name__ == '__main__':

@@ -83,8 +83,8 @@ it('selects the question at the viewport top, independently of new input and the
   act(() => { term.buffer.active.viewportY = 5; listeners.scroll(); });
   expect(screen.queryByRole('region')).toBeNull();
   act(() => { term.buffer.active.viewportY = 50; listeners.scroll(); });
-  fireEvent.click(screen.getByRole('button'));
-  expect(screen.getByRole('button')).toHaveAttribute('aria-expanded', 'true');
+  fireEvent.click(screen.getByRole('button', { name: /terminalInputExpand|terminalInputCollapse/ }));
+  expect(screen.getByRole('button', { name: /terminalInputExpand|terminalInputCollapse/ })).toHaveAttribute('aria-expanded', 'true');
   act(() => { term.buffer.active.viewportY = 100; listeners.scroll(); });
   expect(screen.queryByRole('region')).toBeNull();
   act(() => { term.buffer.active.viewportY = 50; listeners.scroll(); });
@@ -181,4 +181,27 @@ it('does not read or write Recent commands through the tmux preview', async () =
   expect(fetch).toHaveBeenCalledTimes(1);
   expect(fetch.mock.calls[0][0]).toContain('/api/terminal-scroll?');
   expect(localStorage.getItem('iterm:commandHistory:local:v1:browser-session-tmux')).toBeNull();
+});
+
+it('jumps to the visible question with the scrollbar hidden and leaves expansion independent', () => {
+  const { term, listeners } = setup('normal', false, true);
+  act(() => { term.buffer.active.viewportY = 50; listeners.scroll(); });
+  fireEvent.click(screen.getByRole('button', { name: 'terminalInputExpand' }));
+  expect(term.scrollToLine).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: /terminalContextInput 질문 B/ }));
+  expect(term.scrollToLine).toHaveBeenLastCalledWith(40);
+  expect(screen.queryByRole('region')).toBeNull();
+  act(() => { term.buffer.active.viewportY = 80; listeners.scroll(); });
+  expect(screen.getByRole('region')).toHaveTextContent('질문 C');
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it('jumps to the physical tmux question offset through the scroll endpoint', async () => {
+  fetch.mockResolvedValue({ ok: true, json: async () => ({ available: true, history: 200, offset: 60, rows: 20,
+    input_context: { text: '질문 B', offset: 85 } }) });
+  setup('alternate', false, true);
+  await waitFor(() => expect(screen.getByRole('region')).toHaveTextContent('질문 B'));
+  fireEvent.click(screen.getByRole('button', { name: /terminalContextInput 질문 B/ }));
+  expect(JSON.parse(fetch.mock.calls[1][1].body).offset).toBe(85);
+  await act(async () => {});
 });

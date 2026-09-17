@@ -279,6 +279,7 @@ export const en = {
   showTerminalScrollbar: 'Show terminal scrollbar',
   showInputOnScroll: 'Show input while scrolling',
   showInputOnScrollHint: 'Show the question for the current scroll position, using prompt markers (›, ❯) in terminal history.',
+  terminalInputJump: 'Jump to this question',
   terminalContextInput: 'Question for this section',
   terminalInputExpand: 'Expand',
   terminalInputCollapse: 'Collapse',

@@ -18,6 +18,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
   const commandHistory = useRef([]);
   const drag = useRef(null);
   const track = useRef(null);
+  const [jumpedOffset, setJumpedOffset] = useState(null);
   const [dragging, setDragging] = useState(false);
 
   useScrollCommandHistory(historyKey, showInputOnScroll && active && ready && state.offset > 0
@@ -39,6 +40,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
     const term = xtermRef.current;
     stateRef.current = EMPTY;
     setState(EMPTY);
+    setJumpedOffset(null);
     if ((!enabled && !showInputOnScroll) || !active || !ready || !term) return;
     let disposed = false;
     let busy = false;
@@ -158,8 +160,15 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
     <>
     {showInputOnScroll && <TerminalInputPreview key={`${hostId || ''}:${sessionId || ''}`}
       xtermRef={xtermRef} inputPreviewRef={inputPreviewRef} ready={ready} active={active}
-      sessionId={sessionId} scrolled={state.available && state.offset > 0}
+      sessionId={sessionId} scrolled={state.available && state.offset > 0 && state.offset !== jumpedOffset}
       context={state.input_context} historyKey={historyKey}
+      onJump={() => {
+        const context = xtermRef.current?.buffer.active.type === 'normal'
+          ? readTerminalPromptContext(xtermRef.current, commandHistory.current) : stateRef.current.input_context;
+        if (!Number.isFinite(context?.offset)) return;
+        setJumpedOffset(context.offset);
+        actions.current.seek?.(context.offset);
+      }}
       scrollbar={enabled} theme={theme} t={t} />}
     {enabled && <div
       ref={track}

@@ -282,6 +282,7 @@ export const ko = {
   showTerminalScrollbar: '터미널 스크롤바 표시',
   showInputOnScroll: '스크롤시 입력내용보기',
   showInputOnScrollHint: '스크롤 위치에 해당하는 질문을 상단에 표시합니다. 터미널 기록의 질문 표시(›, ❯)를 기준으로 찾습니다.',
+  terminalInputJump: '클릭하면 질문 위치로 이동',
   terminalContextInput: '현재 구간의 질문',
   terminalInputExpand: '펼치기',
   terminalInputCollapse: '접기',
