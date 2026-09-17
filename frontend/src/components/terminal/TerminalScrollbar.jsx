@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { authHeaders } from '../../utils/auth';
+import { einkPollMs } from '../../utils/einkMode';
 import TerminalInputPreview from './TerminalInputPreview';
 import { readTerminalPromptContext } from './terminalPromptContext';
 import useScrollCommandHistory from './useScrollCommandHistory';
@@ -105,7 +106,9 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       // The last wheel update may arrive during the read. Schedule a follow-up
       // instead of leaving context stuck at the previous viewport indefinitely.
       if (busy) { refreshPending = true; return; }
-      const interval = showInputOnScroll && (stateRef.current.offset > 0 || Date.now() < gestureUntil) ? 250 : 2000;
+      const gestureActive = Date.now() < gestureUntil;
+      const baseInterval = showInputOnScroll && (stateRef.current.offset > 0 || gestureActive) ? 250 : 2000;
+      const interval = gestureActive ? baseInterval : einkPollMs(baseInterval);
       timer = setTimeout(() => { timer = null; request(); }, Math.max(0, interval - (Date.now() - lastRead)));
     };
     const seek = (offset) => {
@@ -161,7 +164,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
     {showInputOnScroll && <TerminalInputPreview key={`${hostId || ''}:${sessionId || ''}`}
       xtermRef={xtermRef} inputPreviewRef={inputPreviewRef} ready={ready} active={active}
       sessionId={sessionId} scrolled={state.available && state.offset > 0 && state.offset !== jumpedOffset}
-      context={state.input_context} historyKey={historyKey}
+      context={state.input_context}
       onJump={() => {
         const context = xtermRef.current?.buffer.active.type === 'normal'
           ? readTerminalPromptContext(xtermRef.current, commandHistory.current) : stateRef.current.input_context;

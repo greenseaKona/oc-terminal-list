@@ -11,8 +11,8 @@ from pydantic import BaseModel, Field
 from _deps import verify_auth_token
 from host_common import resolve_host_with_secrets, run_remote_cmd_pooled
 from sqlite_storage import storage
-from tmux_manager import tmux_manager
 from terminal_prompt_context import prompt_context
+from tmux_manager import tmux_manager
 
 router = APIRouter(tags=["terminal"])
 FORMAT = "#{pane_id}|#{history_size}|#{scroll_position}|#{pane_height}|#{pane_mode}"

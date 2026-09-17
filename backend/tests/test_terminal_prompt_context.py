@@ -1,10 +1,10 @@
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import time
 import unittest
+from pathlib import Path
 
 from routes.terminal_scroll import parse_state, scroll_script
 from terminal_prompt_context import prompt_context

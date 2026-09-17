@@ -152,14 +152,18 @@ it('rechecks tmux when the last scroll update arrived during an in-flight read',
   expect(fetch).toHaveBeenCalledTimes(2);
 });
 
-it('shares complete submitted input with Recent commands and loads it once while browsing local history', async () => {
+it('never persists raw terminal submissions while the preview is enabled', () => {
+  const { listeners } = setup('normal', false, true, 'browser-session-private');
+
+  act(() => { listeners.data('hunter2'); listeners.data('\r'); });
+
+  expect(fetch).not.toHaveBeenCalled();
+  expect(localStorage.getItem('iterm:commandHistory:local:v1:browser-session-private')).toBeNull();
+});
+
+it('loads Recent commands once while browsing local history', async () => {
   fetch.mockResolvedValue({ ok: true, json: async () => ({ items: [{ text: '첫 줄\n    둘째 줄', ts: 100 }], hasMore: false }) });
   const { term, listeners, props } = setup('normal', false, true, 'browser-session');
-  act(() => { listeners.data('새 질문'); listeners.data('\r'); });
-  const posts = fetch.mock.calls.filter(([, options]) => options.method === 'POST');
-  expect(posts).toHaveLength(1);
-  expect(JSON.parse(posts[0][1].body)).toEqual({ terminal_key: 'browser-session', text: '새 질문' });
-  expect(JSON.parse(localStorage.getItem('iterm:commandHistory:local:v1:browser-session'))[0].text).toBe('새 질문');
   term.buffer.active.getLine = (row) => ({
     translateToString: () => ({ 10: '› 첫 줄', 11: '  둘째 줄', 12: '', 100: '› ' }[row] ?? 'answer'),
   });
@@ -170,6 +174,27 @@ it('shares complete submitted input with Recent commands and loads it once while
   expect(reads).toHaveLength(1);
   expect(reads[0][0]).toContain('terminal=browser-session');
   expect(props.inputPreviewRef.current).toBeTypeOf('function');
+});
+
+it('slows background tmux refreshes while e-ink mode is active', async () => {
+  vi.useFakeTimers();
+  document.documentElement.setAttribute('data-eink', '1');
+  fetch.mockResolvedValue({ ok: true, json: async () => ({ available: true, history: 200, offset: 60, rows: 20,
+    input_context: { text: '질문 B' } }) });
+  try {
+    const { listeners } = setup('alternate', false, true);
+    await act(async () => {});
+    expect(fetch).toHaveBeenCalledTimes(1);
+
+    act(() => listeners.write());
+    await act(async () => vi.advanceTimersByTimeAsync(999));
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTimeAsync(1));
+    expect(fetch).toHaveBeenCalledTimes(2);
+  } finally {
+    document.documentElement.removeAttribute('data-eink');
+    vi.useRealTimers();
+  }
 });
 
 it('does not read or write Recent commands through the tmux preview', async () => {

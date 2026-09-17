@@ -2,10 +2,9 @@ import { useEffect, useState } from 'react';
 import { createSubmittedInputCapture } from './submittedInput';
 import { buildThemeUI } from '../../styles/themeUI';
 import { cellBackground } from './terminalPromptContext';
-import { pushCommand } from '../../utils/commandHistory';
 
 export default function TerminalInputPreview({ xtermRef, inputPreviewRef, ready,
-  active, scrolled, scrollbar, theme, t, sessionId, context, historyKey, onJump }) {
+  active, scrolled, scrollbar, theme, t, sessionId, context, onJump }) {
   const text = context?.text || '';
   const [expanded, setExpanded] = useState(false);
   const [inputBackground, setInputBackground] = useState(null);
@@ -15,16 +14,11 @@ export default function TerminalInputPreview({ xtermRef, inputPreviewRef, ready,
     setInputBackground(null);
     const term = xtermRef.current;
     if (!ready || !term) return;
-    const capture = createSubmittedInputCapture(term, (text) => {
+    const capture = createSubmittedInputCapture(term, () => {
       // Match the submitted prompt's fill (including terminal RGB/ANSI colors).
       // Plain shells use the raised theme surface instead of the terminal floor.
       const buffer = term.buffer.active;
       setInputBackground(cellBackground(term, buffer.baseY + buffer.cursorY, buffer.cursorX));
-      // Persist complete submitted input through the existing Recent commands
-      // rules. Do not save IME fragments or create another history database.
-      if (historyKey && buffer.type === 'normal') {
-        try { pushCommand(historyKey, text); } catch { /* History must not interrupt terminal input. */ }
-      }
     });
     if (inputPreviewRef) inputPreviewRef.current = capture;
     const subscription = term.onData(capture);
@@ -32,7 +26,7 @@ export default function TerminalInputPreview({ xtermRef, inputPreviewRef, ready,
       subscription.dispose();
       if (inputPreviewRef?.current === capture) inputPreviewRef.current = null;
     };
-  }, [ready, sessionId, xtermRef, inputPreviewRef, historyKey]);
+  }, [ready, sessionId, xtermRef, inputPreviewRef]);
 
   useEffect(() => { setExpanded(false); }, [text]);
 

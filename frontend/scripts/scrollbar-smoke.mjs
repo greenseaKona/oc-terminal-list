@@ -137,10 +137,13 @@ for (const engine of [chromium, webkit]) {
     assert.deepEqual(await page.evaluate(() => window.chunks), [], 'Context detection never types into the shell');
     await page.evaluate(() => { window.term.input('새로 보낸 한글 질문', true); window.term.input('\r', true); });
     await page.locator('#history').click();
-    const saved = page.getByRole('button', {name:'새로 보낸 한글 질문', exact:true});
+    assert.equal(await page.getByRole('button', {name:'새로 보낸 한글 질문', exact:true}).count(), 0,
+      'Raw terminal input is never persisted');
+    await page.evaluate(() => window.saveHistory('명시적으로 저장한 한글 질문'));
+    const saved = page.getByRole('button', {name:'명시적으로 저장한 한글 질문', exact:true});
     await saved.waitFor();
     await saved.click();
-    assert.equal(await page.evaluate(() => window.pickedCommand), '새로 보낸 한글 질문');
+    assert.equal(await page.evaluate(() => window.pickedCommand), '명시적으로 저장한 한글 질문');
     assert.deepEqual(errors, []);
     console.log(engine.name()+': scrollbar, A/B/C context, background and shared Recent commands passed');
   } finally { await browser.close(); }
