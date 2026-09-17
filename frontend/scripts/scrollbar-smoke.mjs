@@ -44,6 +44,7 @@ const bundle = await build({
           <div id="mobile-overlay" style={{position:'absolute',inset:0,zIndex:4,pointerEvents:'none'}} />
           <TerminalScrollbar xtermRef={xtermRef} fitNowRef={fitNowRef} sessionId="test" historyKey="test"
             enabled={enabled} showInputOnScroll={showInput} active ready={ready}
+            tmuxBacked={false}
             theme={{background:'#111',foreground:'#eee'}}
             t={k=>({terminalContextInput:'현재 구간의 질문',terminalInputExpand:'펼치기',terminalInputCollapse:'접기'}[k]||k)} />
         </div>
