@@ -83,6 +83,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       try {
         const res = await fetch(`/api/terminal-scroll?${params}`, {
           method: offset === null ? 'GET' : 'POST',
+          cache: 'no-store',
           headers: { ...authHeaders(), 'Content-Type': 'application/json' },
           signal: controller.signal,
           ...(offset === null ? {} : { body: JSON.stringify({

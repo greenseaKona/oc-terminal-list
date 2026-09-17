@@ -9,9 +9,16 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 
-from routes.terminal_scroll import parse_state, scroll_script, scroll_terminal
+from routes.terminal_scroll import (
+    ScrollRequest,
+    get_scroll,
+    parse_state,
+    scroll_script,
+    scroll_terminal,
+    set_scroll,
+)
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux is required for isolated history tests")
@@ -76,6 +83,19 @@ class ScrollHistoryTest(unittest.TestCase):
 
 
 class ScrollAuthorizationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_routes_prevent_caching_terminal_content(self):
+        with patch("routes.terminal_scroll.scroll_terminal", AsyncMock(return_value={"available": True})):
+            for call in (
+                lambda response: get_scroll(response, "session", username="me"),
+                lambda response: set_scroll(
+                    ScrollRequest(session_id="session", offset=0), response, username="me"
+                ),
+            ):
+                with self.subTest(call=call):
+                    response = Response()
+                    self.assertEqual(await call(response), {"available": True})
+                    self.assertEqual(response.headers["Cache-Control"], "no-store")
+
     async def test_unknown_or_foreign_local_owner_is_rejected_before_tmux(self):
         for owner in [None, "someone-else"]:
             with (

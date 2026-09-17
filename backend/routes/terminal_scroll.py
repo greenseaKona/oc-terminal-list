@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import shlex
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from _deps import verify_auth_token
@@ -171,14 +171,17 @@ async def scroll_terminal(username: str, session: str, host_id: str | None, offs
 
 @router.get("/api/terminal-scroll")
 async def get_scroll(
+    response: Response,
     session_id: str = Query(min_length=1, max_length=256),
     host_id: str | None = None,
     include_input: bool = False,
     username: str = Depends(verify_auth_token),
 ):
+    response.headers["Cache-Control"] = "no-store"
     return await scroll_terminal(username, session_id, host_id, include_input=include_input)
 
 
 @router.post("/api/terminal-scroll")
-async def set_scroll(request: ScrollRequest, username: str = Depends(verify_auth_token)):
+async def set_scroll(request: ScrollRequest, response: Response, username: str = Depends(verify_auth_token)):
+    response.headers["Cache-Control"] = "no-store"
     return await scroll_terminal(username, request.session_id, request.host_id, request.offset, request.include_input)

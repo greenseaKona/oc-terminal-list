@@ -126,6 +126,7 @@ it('uses the same tmux request for the preview and scrollbar, and keeps panes is
   await waitFor(() => expect(screen.getByRole('region')).toHaveTextContent('질문 B'));
   expect(fetch).toHaveBeenCalledTimes(1);
   expect(fetch.mock.calls[0][0]).toContain('include_input=true');
+  expect(fetch.mock.calls[0][1].cache).toBe('no-store');
   rerender(<TerminalScrollbar {...props} sessionId="another-session" />);
   expect(screen.queryByRole('region')).toBeNull();
 });
