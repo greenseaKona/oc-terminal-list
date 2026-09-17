@@ -82,6 +82,17 @@ describe('wsTicketBatch', () => {
     expect(await p).toEqual({ ticket: null, authExpired: false });
   });
 
+  it('티켓 POST가 영원히 멈춰도 대기자를 풀어 쿠키 폴백으로 진행한다', async () => {
+    const postBatch = vi.fn(() => new Promise(() => {}));
+    const { request } = createWsTicketBatcher({ postBatch, windowMs: 10, timeoutMs: 50 });
+    let result;
+
+    request('/ws/a').then((value) => { result = value; });
+    await vi.advanceTimersByTimeAsync(60);
+
+    expect(result).toEqual({ ticket: null, authExpired: false });
+  });
+
   it('응답 배열이 요청보다 짧아도 그 자리만 null 이 된다', async () => {
     const postBatch = vi.fn(async () => ({ ok: true, status: 200, tickets: [{ ticket: 'only' }] }));
     const { request } = createWsTicketBatcher({ postBatch, windowMs: 10 });

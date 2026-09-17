@@ -18,6 +18,8 @@
 export const WS_TICKET_BATCH_WINDOW_MS = 30;
 // Mirrors the server's MAX_BATCH_PATHS — anything over splits into another request.
 export const WS_TICKET_BATCH_MAX = 32;
+// Independent backstop for browsers that fail to settle an aborted fetch after a network switch.
+export const WS_TICKET_BATCH_TIMEOUT_MS = 8000;
 
 const FAILED = { ticket: null, authExpired: false };
 const EXPIRED = { ticket: null, authExpired: true };
@@ -26,7 +28,12 @@ const EXPIRED = { ticket: null, authExpired: true };
  * @param postBatch (paths[]) => Promise<{ ok, status, tickets }>
  *   tickets: array aligned with the request; each item is {ticket, expires_at} or null.
  */
-export const createWsTicketBatcher = ({ postBatch, windowMs = WS_TICKET_BATCH_WINDOW_MS, maxBatch = WS_TICKET_BATCH_MAX } = {}) => {
+export const createWsTicketBatcher = ({
+  postBatch,
+  windowMs = WS_TICKET_BATCH_WINDOW_MS,
+  maxBatch = WS_TICKET_BATCH_MAX,
+  timeoutMs = WS_TICKET_BATCH_TIMEOUT_MS,
+} = {}) => {
   let pending = [];
   let timer = null;
 
@@ -37,11 +44,19 @@ export const createWsTicketBatcher = ({ postBatch, windowMs = WS_TICKET_BATCH_WI
     pending = [];
 
     let result;
+    let timeoutId;
     try {
-      result = await postBatch(batch.map((p) => p.path));
+      result = await Promise.race([
+        postBatch(batch.map((p) => p.path)),
+        new Promise((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error('WS ticket batch timeout')), timeoutMs);
+        }),
+      ]);
     } catch {
       batch.forEach((p) => p.resolve(FAILED));
       return;
+    } finally {
+      clearTimeout(timeoutId);
     }
 
     if (result?.status === 401 || result?.status === 403) {
