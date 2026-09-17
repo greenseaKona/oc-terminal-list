@@ -68,6 +68,8 @@ for (const engine of [chromium, webkit]) {
     const bar = page.getByRole('scrollbar');
     await page.waitForFunction(() => window.term?.buffer.active.baseY > 100);
     await bar.waitFor();
+    assert.ok(await bar.evaluate((element) => element.getBoundingClientRect().width >= 24),
+      'Scrollbar exposes a mobile-sized pointer target');
     const box = await bar.boundingBox();
     await page.mouse.move(box.x + box.width/2, box.y + box.height - 10);
     await page.mouse.down();
@@ -110,8 +112,11 @@ for (const engine of [chromium, webkit]) {
     };
     for (const letter of ['A','B','C','A']) await goToAnswer(letter);
     assert.equal(await preview.evaluate(el => getComputedStyle(el).backgroundColor), 'rgb(60, 64, 72)');
-    await preview.locator('button[aria-expanded]').click();
-    assert.equal(await preview.locator('button[aria-expanded]').getAttribute('aria-expanded'), 'true');
+    const expand = preview.locator('button[aria-expanded]');
+    await expand.focus();
+    assert.notEqual(await expand.evaluate((element) => getComputedStyle(element).boxShadow), 'none');
+    await expand.click();
+    assert.equal(await expand.getAttribute('aria-expanded'), 'true');
     const beforeJump = await page.evaluate(() => window.term.buffer.active.viewportY);
     await preview.locator('button[title]').click();
     await preview.waitFor({state:'hidden'});

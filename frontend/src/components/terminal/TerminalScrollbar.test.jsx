@@ -3,7 +3,7 @@ import { vi, it, expect, beforeEach } from 'vitest';
 import TerminalScrollbar from './TerminalScrollbar';
 
 beforeEach(() => { fetch.mockReset(); });
-const setup = (type = 'normal', enabled = true, showInputOnScroll = false, historyKey) => {
+const setup = (type = 'normal', enabled = true, showInputOnScroll = false, historyKey, tmuxBacked = true) => {
   const listeners = {};
   const sub = (name) => (fn) => { listeners[name] = fn; return { dispose: vi.fn() }; };
   const term = { element: document.createElement('div'), rows: 20,
@@ -13,7 +13,8 @@ const setup = (type = 'normal', enabled = true, showInputOnScroll = false, histo
     scrollToLine: vi.fn((line) => { term.buffer.active.viewportY = line; }),
     onData: sub('data'), onScroll: sub('scroll'), onWriteParsed: sub('write'), onResize: sub('resize') };
   const props = { xtermRef: { current: term }, fitNowRef: { current: vi.fn() },
-    sessionId: 'session', hostId: null, enabled, showInputOnScroll, historyKey, inputPreviewRef: { current: null }, active: true, ready: true,
+    sessionId: 'session', hostId: null, enabled, showInputOnScroll, historyKey, tmuxBacked,
+    inputPreviewRef: { current: null }, active: true, ready: true,
     theme: { background: '#111', foreground: '#eee' }, t: (key) => key };
   const view = render(<TerminalScrollbar {...props} />);
   return { ...view, term, props, listeners };
@@ -38,10 +39,34 @@ it('hides immediately and restores terminal width when the setting is off', () =
   expect(props.fitNowRef.current).toHaveBeenCalledTimes(2);
 });
 
+it('keeps compact visuals inside mobile-sized pointer targets', () => {
+  const { term, listeners } = setup('normal', true, true);
+  const scrollbar = screen.getByRole('scrollbar');
+  expect(scrollbar).toHaveStyle({ width: '24px' });
+  expect(scrollbar.querySelector('[aria-hidden="true"]')).toHaveStyle({ width: '16px' });
+
+  act(() => { term.buffer.active.viewportY = 50; listeners.scroll(); });
+  const toggle = screen.getByRole('button', { name: 'terminalInputExpand' });
+  expect(toggle).toHaveStyle({ minWidth: '24px', minHeight: '24px' });
+  fireEvent.focus(toggle);
+  expect(toggle.style.boxShadow).not.toBe('none');
+});
+
 it('does not query tmux when disabled or in an inactive pane', () => {
   const { rerender, props } = setup('alternate', false);
   rerender(<TerminalScrollbar {...props} enabled active={false} />);
   expect(fetch).not.toHaveBeenCalled();
+});
+
+it('keeps a plain-shell alternate screen local instead of querying tmux', () => {
+  const { term, listeners } = setup('alternate', true, true, undefined, false);
+  term.buffer.active.baseY = 0;
+  term.buffer.active.viewportY = 0;
+
+  act(() => listeners.write());
+
+  expect(fetch).not.toHaveBeenCalled();
+  expect(screen.getByRole('scrollbar')).toHaveAttribute('aria-disabled', 'true');
 });
 
 it('uses tmux history and serializes rapid seeks into the latest target', async () => {

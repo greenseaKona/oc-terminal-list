@@ -1,17 +1,21 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { authHeaders } from '../../utils/auth';
 import { einkPollMs } from '../../utils/einkMode';
+import { buildThemeUI } from '../../styles/themeUI';
+import tokens from '../../styles/tokens';
 import TerminalInputPreview from './TerminalInputPreview';
 import { readTerminalPromptContext } from './terminalPromptContext';
 import useScrollCommandHistory from './useScrollCommandHistory';
 
-export const TERMINAL_SCROLLBAR_WIDTH = 16;
+export const TERMINAL_SCROLLBAR_WIDTH = tokens.space['4'];
+export const TERMINAL_SCROLLBAR_HIT_WIDTH = tokens.space['6'];
 const EMPTY = { available: false, history: 0, offset: 0, rows: 1 };
 
 // The browser has scrollback for a plain shell. tmux owns its own history, so
 // its scrollbar reads and seeks copy-mode through an authenticated endpoint.
 export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, hostId,
-  enabled, active, ready, theme, t, showInputOnScroll = false, inputPreviewRef, historyKey }) {
+  enabled, active, ready, theme, t, showInputOnScroll = false, inputPreviewRef, historyKey,
+  tmuxBacked = true }) {
   const viewportId = useId();
   const [state, setState] = useState(EMPTY);
   const stateRef = useRef(state);
@@ -21,18 +25,19 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
   const track = useRef(null);
   const [jumpedOffset, setJumpedOffset] = useState(null);
   const [dragging, setDragging] = useState(false);
+  const themeUi = buildThemeUI(theme);
 
   useScrollCommandHistory(historyKey, showInputOnScroll && active && ready && state.offset > 0
     && xtermRef.current?.buffer.active.type === 'normal', (items) => {
     commandHistory.current = items;
-    if (xtermRef.current?.buffer.active.type === 'normal') actions.current.refresh?.();
+    if (!tmuxBacked || xtermRef.current?.buffer.active.type === 'normal') actions.current.refresh?.();
   });
 
   useEffect(() => {
     const term = xtermRef.current;
     if (!term) return;
     term.element.id = viewportId;
-    term.element.style.paddingRight = enabled ? `${TERMINAL_SCROLLBAR_WIDTH}px` : '0px';
+    term.element.style.paddingRight = enabled ? TERMINAL_SCROLLBAR_WIDTH : '0px';
     term.element.style.boxSizing = 'border-box';
     fitNowRef.current?.();
   }, [enabled, ready, xtermRef, fitNowRef, viewportId]);
@@ -51,6 +56,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
     let controller = null;
     let refreshPending = false;
     let gestureUntil = 0;
+    const usesTmux = () => tmuxBacked && term.buffer.active.type !== 'normal';
     const params = new URLSearchParams({ session_id: sessionId || '' });
     if (hostId) params.set('host_id', hostId);
     if (showInputOnScroll) params.set('include_input', 'true');
@@ -67,7 +73,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
     };
     const request = async () => {
       if (disposed || busy || document.hidden) return;
-      if (term.buffer.active.type === 'normal') { pending = null; localState(); return; }
+      if (!usesTmux()) { pending = null; localState(); return; }
       if (!sessionId) { publish(EMPTY); return; }
       busy = true;
       const offset = pending;
@@ -85,7 +91,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
         });
         if (!res.ok) throw new Error('Scroll request failed');
         const next = await res.json();
-        if (term.buffer.active.type === 'normal') localState();
+        if (!usesTmux()) localState();
         else if (pending === null) publish(next.available ? next : EMPTY);
       } catch {
         if (!disposed) publish(EMPTY);
@@ -101,7 +107,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       }
     };
     const refresh = () => {
-      if (term.buffer.active.type === 'normal') { localState(); return; }
+      if (!usesTmux()) { localState(); return; }
       if (document.hidden || timer) return;
       // The last wheel update may arrive during the read. Schedule a follow-up
       // instead of leaving context stuck at the previous viewport indefinitely.
@@ -114,7 +120,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
     const seek = (offset) => {
       const history = stateRef.current.history;
       const bounded = Math.max(0, Math.min(history, Math.round(offset)));
-      if (term.buffer.active.type === 'normal') {
+      if (!usesTmux()) {
         term.scrollToLine(history - bounded);
         localState();
       } else {
@@ -128,7 +134,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       term.buffer.onBufferChange(refresh)];
     const gestureRoot = term.element.parentElement || term.element;
     const onGesture = () => {
-      if (!showInputOnScroll || term.buffer.active.type === 'normal') return;
+      if (!showInputOnScroll || !usesTmux()) return;
       gestureUntil = Date.now() + 1000;
       clearTimeout(timer);
       timer = null;
@@ -148,7 +154,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       gestureRoot.removeEventListener('wheel', onGesture);
       gestureRoot.removeEventListener('touchmove', onGesture);
     };
-  }, [enabled, showInputOnScroll, active, ready, sessionId, hostId, xtermRef]);
+  }, [enabled, showInputOnScroll, active, ready, sessionId, hostId, xtermRef, tmuxBacked]);
 
   if (!enabled && !showInputOnScroll) return null;
   const scrollable = ready && state.available && state.history > 0;
@@ -166,7 +172,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       sessionId={sessionId} scrolled={state.available && state.offset > 0 && state.offset !== jumpedOffset}
       context={state.input_context}
       onJump={() => {
-        const context = xtermRef.current?.buffer.active.type === 'normal'
+        const context = !tmuxBacked || xtermRef.current?.buffer.active.type === 'normal'
           ? readTerminalPromptContext(xtermRef.current, commandHistory.current) : stateRef.current.input_context;
         if (!Number.isFinite(context?.offset)) return;
         setJumpedOffset(context.offset);
@@ -221,16 +227,18 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
         event.stopPropagation();
         actions.current.seek?.(targets[event.key]);
       }}
-      style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: TERMINAL_SCROLLBAR_WIDTH,
-        zIndex: 6, background: theme.background, touchAction: 'none', userSelect: 'none',
-        borderLeft: `1px solid color-mix(in srgb, ${theme.foreground} 12%, transparent)`,
+      style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: TERMINAL_SCROLLBAR_HIT_WIDTH,
+        zIndex: tokens.z.terminalScrollbar, background: 'transparent', touchAction: 'none', userSelect: 'none',
         cursor: scrollable ? 'pointer' : 'default' }}
     >
-      <div style={{ position: 'absolute', left: 3, right: 3,
-        top: `${progress * (1 - fraction) * 100}%`, height: `${fraction * 100}%`,
-        borderRadius: 5, pointerEvents: 'none',
-        background: `color-mix(in srgb, ${theme.foreground} ${dragging ? 70 : 38}%, transparent)`,
-        opacity: scrollable ? 1 : 0.2 }} />
+      <div aria-hidden="true" style={{ position: 'absolute', right: 0, top: 0, bottom: 0,
+        width: TERMINAL_SCROLLBAR_WIDTH, background: theme.background, pointerEvents: 'none',
+        borderLeft: `1px solid ${themeUi['border-strong']}` }}>
+        <div style={{ position: 'absolute', left: tokens.space['0.5'], right: tokens.space['0.5'],
+          top: `${progress * (1 - fraction) * 100}%`, height: `${fraction * 100}%`,
+          borderRadius: tokens.radius.full,
+          background: dragging ? themeUi.subtext : scrollable ? themeUi.muted : themeUi.faint }} />
+      </div>
     </div>}
     </>
   );

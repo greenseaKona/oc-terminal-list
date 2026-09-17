@@ -47,6 +47,7 @@ vi.mock('./terminal/terminalHelpers', async (importOriginal) => ({
 import TerminalComponent from './Terminal';
 import { issueWsTicket } from './terminal/terminalHelpers';
 import { measureTerminalFit } from '../utils/terminalFit';
+import { readLocalCommands } from '../utils/commandHistory';
 import { harness, FakeWebSocket, testSettings } from '../test/xtermHarness';
 
 const renderTerminal = (props = {}) => render(
@@ -290,6 +291,36 @@ describe('Terminal', () => {
   });
 
   describe('입력', () => {
+    it('실제 멀티플렉서가 tmux일 때만 alternate buffer 기록을 조회한다', async () => {
+      global.fetch = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ available: true, history: 50, offset: 0, rows: 24 }),
+      }));
+      renderTerminal({ paneMultiplexer: 'none' });
+      const ws = await openSocket();
+      harness.term.buffer.active.type = 'alternate';
+
+      act(() => { harness.term.handlers.scroll(); });
+      expect(global.fetch.mock.calls.some(([url]) => String(url).startsWith('/api/terminal-scroll'))).toBe(false);
+
+      await act(async () => {
+        ws.serverSend(JSON.stringify({ type: 'session-meta', multiplexer: 'tmux' }));
+      });
+      await waitFor(() => expect(
+        global.fetch.mock.calls.some(([url]) => String(url).startsWith('/api/terminal-scroll')),
+      ).toBe(true));
+    });
+
+    it('긴 원시 터미널 입력도 최근 명령에 저장하지 않는다', async () => {
+      renderTerminal({ sessionId: 'private-input' });
+      await openSocket();
+      const secret = 'correct-horse-battery-staple';
+
+      await act(async () => { harness.term.handlers.data(secret); });
+
+      expect(readLocalCommands('private-input')).toEqual([]);
+    });
+
     it('keeps the viewed question when newer keyboard and quick-input submissions arrive', async () => {
       renderTerminal({ settings: { ...testSettings(), showInputOnScroll: true, showTerminalScrollbar: false } });
       const ws = await openSocket();

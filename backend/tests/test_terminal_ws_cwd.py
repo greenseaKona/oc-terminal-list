@@ -8,6 +8,7 @@
 프로세스를 직접 띄우므로 그 인자가 곧 셸이 서는 자리다. tmux 는 세션을 만들 때 `-c` 로
 받으므로 bridge 쪽은 보지 않는다(원격은 host_manager._build_remote_command 가 담당).
 """
+import json
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -146,9 +147,10 @@ class TestSpawnCwd:
         (tmux 면 `tmux-256color`) 실제로 어느 갈래를 탔는지의 지문이 된다.
         """
         with patch.object(terminal_ws.tmux_manager, "session_exists", AsyncMock(return_value=True)):
-            _ws, kwargs = await _connect(mux.NONE, cwd=None, holder=mux.TMUX)
+            ws, kwargs = await _connect(mux.NONE, cwd=None, holder=mux.TMUX)
         assert kwargs["term"] == "tmux-256color"
         assert kwargs["cwd"] is None       # tmux 는 attach 라 시작 경로를 안 받는다
+        assert json.loads(ws.sent_text[0]) == {"type": "session-meta", "multiplexer": "tmux"}
 
     async def test_tmux_는_bridge_에_경로를_주지_않는다(self, workspace_dir):
         """tmux 는 attach 다 — 시작 경로는 세션을 만들 때 `-c` 로 이미 정해졌다."""

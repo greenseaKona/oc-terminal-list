@@ -16,14 +16,14 @@ import time
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 
+import local_mux
+import multiplexer as mux
 from _deps import is_safe_id
 from cache import invalidate_session
 from rate_limit import check_rate_limit
 from session_launch import _resolve_create_cwd, _resolve_shell
 from sqlite_storage import storage
 from tickets import _push_ws_tickets
-import local_mux
-import multiplexer as mux
 from tmux_manager import tmux_manager
 from ws_auth import authenticate_ws
 from ws_bridge import TmuxClientBridge
@@ -93,6 +93,7 @@ async def terminal_websocket(
     # 전역 설정을 바꿔도 이 pane 은 자기를 붙잡고 있는 쪽으로 계속 붙는다.
     picked = mux.normalize(multiplexer) if isinstance(multiplexer, str) and multiplexer else None
     choice = holder or picked or await local_mux.choice_for(username)
+    await websocket.send_text(json.dumps({"type": "session-meta", "multiplexer": choice}))
 
     # **고른 경로는 무엇이 붙잡든 지켜진다.** tmux 는 세션을 만들 때 `-c` 로 받지만(아래),
     # none 은 이 파일의 bridge 가 프로세스를 직접 띄운다. 여기서 안 넘기면 bridge 의
@@ -242,5 +243,3 @@ async def terminal_websocket(
         await invalidate_session(session_id)
         _unregister_ws_client("local", session_id, client_token)
         log_detach(kind="local", session=session_id, client_id=client_id, opened_at=opened_at)
-
-
