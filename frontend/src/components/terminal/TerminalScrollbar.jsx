@@ -28,9 +28,9 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
   const themeUi = buildThemeUI(theme);
 
   useScrollCommandHistory(historyKey, showInputOnScroll && active && ready && state.offset > 0
-    && xtermRef.current?.buffer.active.type === 'normal', (items) => {
+    && !tmuxBacked, (items) => {
     commandHistory.current = items;
-    if (!tmuxBacked || xtermRef.current?.buffer.active.type === 'normal') actions.current.refresh?.();
+    if (!tmuxBacked) actions.current.refresh?.();
   });
 
   useEffect(() => {
@@ -56,7 +56,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
     let controller = null;
     let refreshPending = false;
     let gestureUntil = 0;
-    const usesTmux = () => tmuxBacked && term.buffer.active.type !== 'normal';
+    const usesTmux = () => tmuxBacked;
     const params = new URLSearchParams({ session_id: sessionId || '' });
     if (hostId) params.set('host_id', hostId);
     if (showInputOnScroll) params.set('include_input', 'true');
@@ -103,7 +103,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
         // Keep at most one seek in flight. Dragging replaces the queued target
         // rather than accumulating commands behind a slow SSH connection.
         if (!disposed && pending !== null) request();
-        else if (!disposed && refreshPending) { refreshPending = false; refresh(); }
+        else if (!disposed && refreshPending) { refreshPending = false; request(); }
         // A quiet tmux pane can change without emitting an xterm event (for example,
         // while viewing copy-mode history). Keep one slow background read armed.
         else if (!disposed) refresh();
@@ -116,7 +116,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       // instead of leaving context stuck at the previous viewport indefinitely.
       if (busy) { refreshPending = true; return; }
       const gestureActive = Date.now() < gestureUntil;
-      const baseInterval = showInputOnScroll && (stateRef.current.offset > 0 || gestureActive) ? 250 : 2000;
+      const baseInterval = gestureActive && showInputOnScroll ? 250 : 2000;
       const interval = gestureActive ? baseInterval : einkPollMs(baseInterval);
       timer = setTimeout(() => { timer = null; request(); }, Math.max(0, interval - (Date.now() - lastRead)));
     };
@@ -175,7 +175,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       sessionId={sessionId} scrolled={state.available && state.offset > 0 && state.offset !== jumpedOffset}
       context={state.input_context}
       onJump={() => {
-        const context = !tmuxBacked || xtermRef.current?.buffer.active.type === 'normal'
+        const context = !tmuxBacked
           ? readTerminalPromptContext(xtermRef.current, commandHistory.current) : stateRef.current.input_context;
         if (!Number.isFinite(context?.offset)) return;
         setJumpedOffset(context.offset);

@@ -322,7 +322,8 @@ describe('Terminal', () => {
     });
 
     it('keeps the viewed question when newer keyboard and quick-input submissions arrive', async () => {
-      renderTerminal({ settings: { ...testSettings(), showInputOnScroll: true, showTerminalScrollbar: false } });
+      renderTerminal({ paneMultiplexer: 'none',
+        settings: { ...testSettings(), showInputOnScroll: true, showTerminalScrollbar: false } });
       const ws = await openSocket();
       const term = harness.term;
       Object.assign(term.buffer.active, { baseY: 100, viewportY: 100, cursorY: 0, cursorX: 2, length: 101,

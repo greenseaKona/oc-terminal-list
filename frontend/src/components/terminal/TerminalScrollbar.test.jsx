@@ -3,7 +3,7 @@ import { vi, it, expect, beforeEach } from 'vitest';
 import TerminalScrollbar from './TerminalScrollbar';
 
 beforeEach(() => { fetch.mockReset(); });
-const setup = (type = 'normal', enabled = true, showInputOnScroll = false, historyKey, tmuxBacked = true) => {
+const setup = (type = 'normal', enabled = true, showInputOnScroll = false, historyKey, tmuxBacked = false) => {
   const listeners = {};
   const sub = (name) => (fn) => { listeners[name] = fn; return { dispose: vi.fn() }; };
   const term = { element: document.createElement('div'), rows: 20,
@@ -53,7 +53,7 @@ it('keeps compact visuals inside mobile-sized pointer targets', () => {
 });
 
 it('does not query tmux when disabled or in an inactive pane', () => {
-  const { rerender, props } = setup('alternate', false);
+  const { rerender, props } = setup('alternate', false, false, undefined, true);
   rerender(<TerminalScrollbar {...props} enabled active={false} />);
   expect(fetch).not.toHaveBeenCalled();
 });
@@ -69,12 +69,12 @@ it('keeps a plain-shell alternate screen local instead of querying tmux', () => 
   expect(screen.getByRole('scrollbar')).toHaveAttribute('aria-disabled', 'true');
 });
 
-it('uses tmux history and serializes rapid seeks into the latest target', async () => {
+it('uses retained tmux history in a normal buffer and serializes rapid seeks', async () => {
   let release;
   fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ available: true, history: 200, offset: 0, rows: 20 }) });
   fetch.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
   fetch.mockResolvedValue({ ok: true, json: async () => ({ available: true, history: 200, offset: 60, rows: 20 }) });
-  setup('alternate');
+  setup('normal', true, false, undefined, true);
   await waitFor(() => expect(screen.getByRole('scrollbar')).toHaveAttribute('aria-valuemax', '200'));
   const bar = screen.getByRole('scrollbar');
   fireEvent.keyDown(bar, { key: 'PageUp' });
@@ -88,7 +88,7 @@ it('uses tmux history and serializes rapid seeks into the latest target', async 
 
 it('disables history controls after an endpoint failure', async () => {
   fetch.mockResolvedValue({ ok: false });
-  setup('alternate');
+  setup('alternate', true, false, undefined, true);
   await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
   expect(screen.getByRole('scrollbar')).toHaveAttribute('aria-disabled', 'true');
 });
@@ -121,7 +121,7 @@ it('selects the question at the viewport top, independently of new input and the
 
 it('uses the same tmux request for the preview and scrollbar, and keeps panes isolated', async () => {
   fetch.mockResolvedValue({ ok: true, json: async () => ({ available: true, history: 200, offset: 60, rows: 20, input_context: { text: '질문 B' } }) });
-  const { props, rerender } = setup('alternate', true, true);
+  const { props, rerender } = setup('alternate', true, true, undefined, true);
   act(() => props.inputPreviewRef.current('빠른 입력\r', '빠른 입력'));
   await waitFor(() => expect(screen.getByRole('region')).toHaveTextContent('질문 B'));
   expect(fetch).toHaveBeenCalledTimes(1);
@@ -148,7 +148,7 @@ it('does not keep the preview visible while a pane is inactive or reconnecting',
 it('changes tmux questions as seeks complete and hides the old question while moving', async () => {
   const state = { available: true, history: 200, offset: 30, rows: 20 };
   fetch.mockResolvedValueOnce({ ok: true, json: async () => ({ ...state, input_context: { text: '질문 C' } }) });
-  const { props, rerender } = setup('alternate', true, true);
+  const { props, rerender } = setup('alternate', true, true, undefined, true);
   await waitFor(() => expect(screen.getByRole('region')).toHaveTextContent('질문 C'));
   let release;
   fetch.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
@@ -169,7 +169,7 @@ it('rechecks tmux when the last scroll update arrived during an in-flight read',
   fetch.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
   fetch.mockResolvedValue({ ok: true, json: async () => ({ available: true, history: 200, offset: 60, rows: 20,
     input_context: { text: '질문 B' } }) });
-  const { listeners } = setup('alternate', false, true);
+  const { listeners } = setup('alternate', false, true, undefined, true);
   act(() => listeners.write());
   await act(async () => release({ ok: true, json: async () => ({ available: true, history: 200, offset: 30, rows: 20,
     input_context: { text: '질문 C' } }) }));
@@ -207,15 +207,15 @@ it('keeps a slow recurring tmux refresh active in e-ink mode', async () => {
   fetch.mockResolvedValue({ ok: true, json: async () => ({ available: true, history: 200, offset: 60, rows: 20,
     input_context: { text: '질문 B' } }) });
   try {
-    setup('alternate', false, true);
+    setup('alternate', false, true, undefined, true);
     await act(async () => {});
     expect(fetch).toHaveBeenCalledTimes(1);
 
-    await act(async () => vi.advanceTimersByTimeAsync(999));
+    await act(async () => vi.advanceTimersByTimeAsync(7999));
     expect(fetch).toHaveBeenCalledTimes(1);
     await act(async () => vi.advanceTimersByTimeAsync(1));
     expect(fetch).toHaveBeenCalledTimes(2);
-    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    await act(async () => vi.advanceTimersByTimeAsync(8000));
     expect(fetch).toHaveBeenCalledTimes(3);
   } finally {
     document.documentElement.removeAttribute('data-eink');
@@ -226,7 +226,7 @@ it('keeps a slow recurring tmux refresh active in e-ink mode', async () => {
 it('does not read or write Recent commands through the tmux preview', async () => {
   fetch.mockResolvedValue({ ok: true, json: async () => ({ available: true, history: 200, offset: 60, rows: 20,
     input_context: { text: 'tmux 질문' } }) });
-  const { listeners } = setup('alternate', true, true, 'browser-session-tmux');
+  const { listeners } = setup('alternate', true, true, 'browser-session-tmux', true);
   act(() => { listeners.data('새 질문'); listeners.data('\r'); });
   await waitFor(() => expect(screen.getByRole('region')).toHaveTextContent('tmux 질문'));
   expect(fetch).toHaveBeenCalledTimes(1);
@@ -250,7 +250,7 @@ it('jumps to the visible question with the scrollbar hidden and leaves expansion
 it('jumps to the physical tmux question offset through the scroll endpoint', async () => {
   fetch.mockResolvedValue({ ok: true, json: async () => ({ available: true, history: 200, offset: 60, rows: 20,
     input_context: { text: '질문 B', offset: 85 } }) });
-  setup('alternate', false, true);
+  setup('alternate', false, true, undefined, true);
   await waitFor(() => expect(screen.getByRole('region')).toHaveTextContent('질문 B'));
   fireEvent.click(screen.getByRole('button', { name: /terminalContextInput 질문 B/ }));
   expect(JSON.parse(fetch.mock.calls[1][1].body).offset).toBe(85);
