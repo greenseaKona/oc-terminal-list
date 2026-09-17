@@ -6,22 +6,33 @@ main.py 에서 분리. 전역 auth_manager 를 역참조하는 대신 _deps.get_
 from __future__ import annotations
 
 import logging
+from uuid import UUID
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response
 
 from _deps import AUTH_COOKIE_NAME, get_auth_manager, verify_auth_token
 from auth_cookie import _clear_auth_cookie, _set_auth_cookie
 from models import (
-    LoginRequest, OtpDisableRequest, OtpEnableRequest, OtpLoginRequest,
-    PasskeyLoginCompleteRequest, PasskeyRegisterBeginRequest,
-    PasskeyRegisterCompleteRequest, PasskeyRenameRequest,
-    PasswordChangeRequest, SetupRequest,
+    LoginRequest,
+    OtpDisableRequest,
+    OtpEnableRequest,
+    OtpLoginRequest,
+    PasskeyLoginCompleteRequest,
+    PasskeyRegisterBeginRequest,
+    PasskeyRegisterCompleteRequest,
+    PasskeyRenameRequest,
+    PasswordChangeRequest,
+    SetupRequest,
 )
 from passkey import (
     derive_rp_info,
     make_authentication_options,
     make_registration_options,
+)
+from passkey import (
     verify_authentication as _verify_authn,
+)
+from passkey import (
     verify_registration as _verify_reg,
 )
 from rate_limit import check_rate_limit, client_ip_from_request
@@ -287,7 +298,7 @@ async def passkey_register_complete(
         sign_count=int(verification.sign_count or 0),
         transports=transports,
         label=label,
-        aaguid=getattr(verification, "aaguid", None) and bytes(verification.aaguid) if hasattr(verification, "aaguid") else None,
+        aaguid=UUID(verification.aaguid).bytes,
         backup_eligible=bool(getattr(verification, "credential_backed_up", False)),
         backup_state=bool(getattr(verification, "credential_backed_up", False)),
     )
