@@ -78,6 +78,22 @@ describe('Settings', () => {
     expect(screen.getByRole('dialog').style.backdropFilter).toMatch(/blur\(.*20px\)/);
   });
 
+  it('marks the three-action footer for the narrow-screen stacked layout', () => {
+    render(
+      <Settings
+        isOpen={true}
+        onClose={vi.fn()}
+        settings={fullSettings}
+        onSave={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Reset to Default' }).closest('footer'))
+      .toHaveClass('iterm-settings-action-footer');
+    expect(screen.getByText(/^Cancel$/).parentElement)
+      .toHaveClass('iterm-settings-action-footer-actions');
+  });
+
   it('does not crash when scrollSensitivity is undefined (legacy storage)', () => {
     const legacySettings = { ...fullSettings, scrollSensitivity: undefined };
     expect(() =>

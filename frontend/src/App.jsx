@@ -1222,23 +1222,26 @@ function App() {
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .spin { animation: spin 1s linear infinite; }
 
-        /* 모바일 모달 풀스크린 — 768px 이하면 모달이 전체 화면을 진짜 다 차지.
-           inline transform/maxWidth/maxHeight 가 있어도 !important 로 reset.
-           스크롤바도 트랙 폭 0 으로 사라지게 (콘텐츠는 스크롤 가능). */
         @media (max-width: 768px) {
-          .iterm-modal-card {
-            width: 100vw !important;
-            height: 100% !important;
-            max-width: 100vw !important;
-            max-height: 100% !important;
-            top: 0 !important;
-            left: 0 !important;
-            transform: none !important;
-            border-radius: 0 !important;
-            border: none !important;
-          }
           .iterm-no-scrollbar { scrollbar-width: none; }
           .iterm-no-scrollbar::-webkit-scrollbar { width: 0 !important; height: 0 !important; }
+        }
+
+        @media (max-width: 520px) {
+          .iterm-settings-action-footer {
+            align-items: stretch !important;
+            flex-direction: column;
+            gap: 8px;
+          }
+          .iterm-settings-action-footer > button,
+          .iterm-settings-action-footer-actions,
+          .iterm-settings-action-footer-actions > button {
+            width: 100% !important;
+          }
+          .iterm-settings-action-footer-actions {
+            flex-direction: column;
+            gap: 8px !important;
+          }
         }
       `}</style>
 
