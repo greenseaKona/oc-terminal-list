@@ -184,6 +184,12 @@ describe('Terminal', () => {
   });
 
   describe('상태 오버레이', () => {
+    it('보이지 않는 모바일 pane 에서는 로딩 애니메이션을 돌리지 않는다', () => {
+      const { container } = renderTerminal({ isMobile: true, isActive: false });
+
+      expect(container.querySelectorAll('[style*="term-skeleton-pulse"]')).toHaveLength(0);
+    });
+
     it('takeover(detached 토큰) 시 "다른 기기에서 접속 중" 을 띄운다', async () => {
       renderTerminal();
       const ws = await openSocket();
@@ -296,7 +302,10 @@ describe('Terminal', () => {
         ok: true,
         json: async () => ({ available: true, history: 50, offset: 0, rows: 24 }),
       }));
-      renderTerminal({ paneMultiplexer: 'none' });
+      renderTerminal({
+        paneMultiplexer: 'none',
+        settings: testSettings({ showTerminalScrollbar: true }),
+      });
       const ws = await openSocket();
       harness.term.buffer.active.type = 'alternate';
 
@@ -552,6 +561,19 @@ describe('Terminal', () => {
   });
 
   describe('WebGL 수명', () => {
+    it('공유 설정이 켜져 있어도 모바일에서는 WebGL 을 부착하지 않는다', async () => {
+      render(<TerminalComponent
+        sessionId="gl-mobile"
+        settings={testSettings({ useWebgl: true })}
+        isMobile
+        isActive
+        isFocused
+      />);
+      await openSocket();
+
+      expect(harness.webgls).toHaveLength(0);
+    });
+
     // 컨텍스트는 브라우저당 ~16개 한도 — 비활성 pane 이 물고 있으면 고갈되어 탭이 통째로 죽는다.
     it('활성이면 부착하고, 비활성이 되면 유예 후 반납한다', async () => {
       const props = { sessionId: 'gl', settings: testSettings({ useWebgl: true }), isFocused: true };

@@ -135,6 +135,19 @@ describe('createOutputSink', () => {
       expect(term.writes.length).toBeLessThanOrEqual(10);
       expect(term.text).toBe('x'.repeat(60));
     });
+
+    it('uses a lower sustained render budget on a phone without delaying the leading edge', () => {
+      const out = sink({ isMobile: () => true });
+      out.push(bytes('a'));
+      expect(term.text).toBe('a');
+
+      out.push(bytes('b'));
+      vi.advanceTimersByTime(COALESCE_FOCUSED_MS);
+      expect(term.text).toBe('a');
+
+      vi.advanceTimersByTime(100);
+      expect(term.text).toBe('ab');
+    });
   });
 
   describe('inactive panes', () => {
@@ -149,6 +162,19 @@ describe('createOutputSink', () => {
       active = true;
       out.flush();
       expect(term.text).toBe('while-inactive');
+    });
+
+    it('buffers instead of rendering while the browser page is hidden', () => {
+      let visible = false;
+      const out = sink({ isVisible: () => visible });
+
+      out.push(bytes('while-hidden'));
+      vi.advanceTimersByTime(200);
+      expect(term.writes).toHaveLength(0);
+
+      visible = true;
+      out.flush();
+      expect(term.text).toBe('while-hidden');
     });
   });
 

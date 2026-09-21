@@ -1,13 +1,13 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { authHeaders } from '../../utils/auth';
 import { einkPollMs } from '../../utils/einkMode';
-import { buildThemeUI } from '../../styles/themeUI';
+import { buildThemeUI, withAlpha } from '../../styles/themeUI';
 import tokens from '../../styles/tokens';
 import TerminalInputPreview from './TerminalInputPreview';
 import { readTerminalPromptContext } from './terminalPromptContext';
 import useScrollCommandHistory from './useScrollCommandHistory';
 
-export const TERMINAL_SCROLLBAR_WIDTH = tokens.space['4'];
+export const TERMINAL_SCROLLBAR_WIDTH = tokens.space['2'];
 export const TERMINAL_SCROLLBAR_HIT_WIDTH = tokens.space['6'];
 const EMPTY = { available: false, history: 0, offset: 0, rows: 1 };
 
@@ -25,6 +25,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
   const track = useRef(null);
   const [jumpedOffset, setJumpedOffset] = useState(null);
   const [dragging, setDragging] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const themeUi = buildThemeUI(theme);
 
   useScrollCommandHistory(historyKey, showInputOnScroll && active && ready && state.offset > 0
@@ -33,11 +34,11 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
     if (!tmuxBacked) actions.current.refresh?.();
   });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const term = xtermRef.current;
     if (!term) return;
     term.element.id = viewportId;
-    term.element.style.paddingRight = enabled ? TERMINAL_SCROLLBAR_WIDTH : '0px';
+    term.element.style.paddingRight = '0px';
     term.element.style.boxSizing = 'border-box';
     fitNowRef.current?.();
   }, [enabled, ready, xtermRef, fitNowRef, viewportId]);
@@ -52,8 +53,11 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
     let busy = false;
     let pending = null;
     let timer = null;
+    let requestFrame = null;
+    let gestureTimer = null;
     let lastRead = 0;
     let controller = null;
+    let mutationInFlight = false;
     let refreshPending = false;
     let gestureUntil = 0;
     const usesTmux = () => tmuxBacked;
@@ -76,18 +80,22 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       if (!usesTmux()) { pending = null; localState(); return; }
       if (!sessionId) { publish(EMPTY); return; }
       busy = true;
-      const offset = pending;
+      const operation = pending;
       pending = null;
-      controller = new AbortController();
-      const timeout = setTimeout(() => controller?.abort(), 6000);
+      const offset = operation?.offset ?? null;
+      const includeInput = operation?.includeInput ?? showInputOnScroll;
+      mutationInFlight = operation !== null;
+      const ctl = new AbortController();
+      controller = ctl;
+      const timeout = setTimeout(() => ctl.abort(), 6000);
       try {
         const res = await fetch(`/api/terminal-scroll?${params}`, {
           method: offset === null ? 'GET' : 'POST',
           cache: 'no-store',
           headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-          signal: controller.signal,
+          signal: ctl.signal,
           ...(offset === null ? {} : { body: JSON.stringify({
-            session_id: sessionId, host_id: hostId || null, offset, include_input: showInputOnScroll,
+            session_id: sessionId, host_id: hostId || null, offset, include_input: includeInput,
           }) }),
         });
         if (!res.ok) throw new Error('Scroll request failed');
@@ -95,10 +103,13 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
         if (!usesTmux()) localState();
         else if (pending === null) publish(next.available ? next : EMPTY);
       } catch {
-        if (!disposed) publish(EMPTY);
+        // An aborted read yields to a seek waiting in `pending`; keep the
+        // optimistic offset instead of flashing the "no history" fallback.
+        if (!disposed && !ctl.signal.aborted) publish(EMPTY);
       } finally {
         clearTimeout(timeout);
         controller = null;
+        mutationInFlight = false;
         busy = false;
         lastRead = Date.now();
         // Keep at most one seek in flight. Dragging replaces the queued target
@@ -121,19 +132,53 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       const interval = gestureActive ? baseInterval : einkPollMs(baseInterval);
       timer = setTimeout(() => { timer = null; request(); }, Math.max(0, interval - (Date.now() - lastRead)));
     };
-    const seek = (offset) => {
+    const scrollLocalToLine = (line) => {
+      const duration = term.options?.smoothScrollDuration;
+      if (!duration) { term.scrollToLine(line); return; }
+      term.options.smoothScrollDuration = 0;
+      try { term.scrollToLine(line); } finally { term.options.smoothScrollDuration = duration; }
+    };
+    const scheduleRequest = (defer) => {
+      if (!defer || busy) {
+        if (requestFrame !== null) {
+          cancelAnimationFrame(requestFrame);
+          requestFrame = null;
+        }
+        request();
+        return;
+      }
+      if (requestFrame !== null) return;
+      requestFrame = requestAnimationFrame(() => {
+        requestFrame = null;
+        request();
+      });
+    };
+    const seek = (offset, { includeInput = showInputOnScroll, defer = false } = {}) => {
       const history = stateRef.current.history;
       const bounded = Math.max(0, Math.min(history, Math.round(offset)));
       if (!usesTmux()) {
-        term.scrollToLine(history - bounded);
+        scrollLocalToLine(history - bounded);
         localState();
       } else {
-        pending = bounded;
+        pending = { offset: bounded, includeInput };
+        // A drag is a gesture: poll fast afterwards. A read-only refresh can
+        // yield immediately, but a seek must finish before the latest target
+        // starts because aborting HTTP does not cancel the server-side tmux command.
+        gestureUntil = Date.now() + 1000;
         publish({ ...stateRef.current, offset: bounded, input_context: null });
-        request();
+        if (busy && !mutationInFlight) controller?.abort();
+        scheduleRequest(defer);
       }
     };
-    actions.current = { seek, refresh };
+    const settleGesture = () => {
+      if (!showInputOnScroll || !usesTmux()) return;
+      clearTimeout(gestureTimer);
+      gestureTimer = setTimeout(() => {
+        gestureTimer = null;
+        seek(stateRef.current.offset, { includeInput: true });
+      }, 120);
+    };
+    actions.current = { seek, refresh, settleGesture };
     const subscriptions = [term.onScroll(refresh), term.onWriteParsed(refresh), term.onResize(refresh),
       term.buffer.onBufferChange(refresh)];
     const gestureRoot = term.element.parentElement || term.element;
@@ -152,6 +197,8 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       disposed = true;
       actions.current = {};
       clearTimeout(timer);
+      clearTimeout(gestureTimer);
+      if (requestFrame !== null) cancelAnimationFrame(requestFrame);
       controller?.abort();
       subscriptions.forEach((subscription) => subscription.dispose());
       document.removeEventListener('visibilitychange', refresh);
@@ -164,10 +211,18 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
   const scrollable = ready && state.available && state.history > 0;
   const fraction = Math.min(1, Math.max(0.08, state.rows / (state.history + state.rows)));
   const progress = state.history ? 1 - state.offset / state.history : 1;
-  const seekAt = (clientY, grab = fraction / 2) => {
+  const seekAt = (clientY, grab = fraction / 2, options) => {
     const rect = track.current.getBoundingClientRect();
     const ratio = Math.max(0, Math.min(1, ((clientY - rect.top) / rect.height - grab) / (1 - fraction)));
-    actions.current.seek?.((1 - ratio) * state.history);
+    actions.current.seek?.((1 - ratio) * state.history, options);
+  };
+  const finishDrag = () => {
+    const moved = drag.current?.moved;
+    drag.current = null;
+    setDragging(false);
+    if (moved && tmuxBacked && showInputOnScroll) {
+      actions.current.seek?.(stateRef.current.offset, { includeInput: true });
+    }
   };
   return (
     <>
@@ -183,7 +238,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
         actions.current.seek?.(context.offset);
       }}
       scrollbar={enabled} theme={theme} t={t} />}
-    {enabled && <div
+    {enabled && scrollable && <div
       ref={track}
       role="scrollbar"
       aria-label={t('showTerminalScrollbar')}
@@ -192,10 +247,10 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       aria-valuemin={0}
       aria-valuemax={state.history}
       aria-valuenow={Math.max(0, state.history - state.offset)}
-      aria-disabled={!scrollable}
-      tabIndex={scrollable ? 0 : -1}
-      title={state.available ? t('showTerminalScrollbarHint') : t('terminalScrollUnavailable')}
-      onPointerEnter={() => actions.current.refresh?.()}
+      tabIndex={0}
+      title={t('showTerminalScrollbarHint')}
+      onPointerEnter={() => { setHovered(true); actions.current.refresh?.(); }}
+      onPointerLeave={() => setHovered(false)}
       onPointerDown={(event) => {
         if (!scrollable || event.button !== 0) return;
         event.preventDefault();
@@ -203,23 +258,37 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
         const rect = event.currentTarget.getBoundingClientRect();
         const y = (event.clientY - rect.top) / rect.height;
         const top = progress * (1 - fraction);
-        drag.current = y >= top && y <= top + fraction ? y - top : fraction / 2;
+        const grabbedThumb = y >= top && y <= top + fraction;
+        drag.current = { grab: grabbedThumb ? y - top : fraction / 2, moved: false };
         event.currentTarget.setPointerCapture(event.pointerId);
         setDragging(true);
-        seekAt(event.clientY, drag.current);
+        if (!grabbedThumb) seekAt(event.clientY, drag.current.grab);
       }}
-      onPointerMove={(event) => { if (drag.current !== null) seekAt(event.clientY, drag.current); }}
+      onPointerMove={(event) => {
+        if (drag.current === null) return;
+        drag.current.moved = true;
+        seekAt(event.clientY, drag.current.grab, { includeInput: false, defer: true });
+      }}
       onPointerUp={(event) => {
-        drag.current = null;
-        setDragging(false);
+        finishDrag();
         if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
       }}
-      onLostPointerCapture={() => { drag.current = null; setDragging(false); }}
+      onLostPointerCapture={finishDrag}
       onClick={(event) => event.stopPropagation()}
       onWheel={(event) => {
-        if (!scrollable) return;
+        if (!scrollable || event.deltaY === 0) return;
+        event.preventDefault();
         event.stopPropagation();
-        actions.current.seek?.(state.offset + (event.deltaY < 0 ? 3 : -3));
+        const magnitude = Math.abs(event.deltaY);
+        const rows = event.deltaMode === 2
+          ? state.rows
+          : event.deltaMode === 1
+            ? Math.max(1, Math.round(magnitude))
+            : Math.max(1, Math.round(magnitude / 16));
+        const distance = Math.min(state.rows, rows);
+        actions.current.seek?.(stateRef.current.offset + (event.deltaY < 0 ? distance : -distance),
+          { includeInput: false, defer: true });
+        actions.current.settleGesture?.();
       }}
       onKeyDown={(event) => {
         if (!scrollable) return;
@@ -233,15 +302,16 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       }}
       style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: TERMINAL_SCROLLBAR_HIT_WIDTH,
         zIndex: tokens.z.terminalScrollbar, background: 'transparent', touchAction: 'none', userSelect: 'none',
-        cursor: scrollable ? 'pointer' : 'default' }}
+        cursor: dragging ? 'grabbing' : 'grab' }}
     >
       <div aria-hidden="true" style={{ position: 'absolute', right: 0, top: 0, bottom: 0,
-        width: TERMINAL_SCROLLBAR_WIDTH, background: theme.background, pointerEvents: 'none',
-        borderLeft: `1px solid ${themeUi['border-strong']}` }}>
-        <div style={{ position: 'absolute', left: tokens.space['0.5'], right: tokens.space['0.5'],
+        width: TERMINAL_SCROLLBAR_WIDTH, pointerEvents: 'none' }}>
+        <div className="tl-scrollbar-thumb" style={{ position: 'absolute', left: tokens.space['0.5'], right: tokens.space['0.5'],
           top: `${progress * (1 - fraction) * 100}%`, height: `${fraction * 100}%`,
-          borderRadius: tokens.radius.full,
-          background: dragging ? themeUi.subtext : scrollable ? themeUi.muted : themeUi.faint }} />
+          borderRadius: tokens.radius.full, transformOrigin: 'center',
+          transform: `scaleX(${dragging ? 2 : hovered ? 1.5 : 1})`,
+          transition: `transform ${tokens.motion.fast}, background-color ${tokens.motion.fast}`,
+          background: withAlpha(themeUi.text, dragging ? 0.8 : hovered ? 0.55 : scrollable ? 0.35 : 0.15) }} />
       </div>
     </div>}
     </>

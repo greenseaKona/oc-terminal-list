@@ -164,7 +164,7 @@ export const GeneralPanel = ({ s, change, username, onLogout, t }) => (
       <Toggle
         label={t('showTerminalScrollbar')}
         hint={t('showTerminalScrollbarHint')}
-        checked={s.showTerminalScrollbar !== false}
+        checked={s.showTerminalScrollbar === true}
         onChange={(v) => change('showTerminalScrollbar', v)}
       />
       <Toggle

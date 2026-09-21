@@ -187,8 +187,8 @@ const motion = {
 // ─── z-index ─────────────────────────────────────────────────────────────
 const z = {
   base: 0,
-  terminalScrollbar: 6,
-  terminalInputPreview: 7,
+  terminalInputPreview: 30,
+  terminalScrollbar: 31,
   raised: 10,
   sticky: 20,
   overlay: 50,

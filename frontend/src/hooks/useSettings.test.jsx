@@ -9,6 +9,10 @@ const TestSettings = () => {
 };
 
 describe('useSettings', () => {
+  it('keeps the terminal scrollbar opt-in by default', () => {
+    expect(DEFAULT_SETTINGS.showTerminalScrollbar).toBe(false);
+  });
+
   it('remembers opting into input preview independently of the scrollbar', () => {
     expect(DEFAULT_SETTINGS.showInputOnScroll).toBe(false);
     const PreviewSetting = () => {
@@ -26,19 +30,19 @@ describe('useSettings', () => {
     render(<PreviewSetting />);
     expect(screen.getByRole('button', { name: 'enabled' })).toBeInTheDocument();
   });
-  it('persists an explicitly hidden scrollbar across remounts', () => {
+  it('persists an explicit scrollbar opt-in across remounts', () => {
     const ScrollbarSetting = () => {
       const { settings, updateSettings } = useSettings(false);
-      return <button onClick={() => updateSettings({ showTerminalScrollbar: false })}>
+      return <button onClick={() => updateSettings({ showTerminalScrollbar: true })}>
         {settings.showTerminalScrollbar ? 'shown' : 'hidden'}
       </button>;
     };
     const first = render(<ScrollbarSetting />);
-    fireEvent.click(screen.getByRole('button', { name: 'shown' }));
-    expect(JSON.parse(localStorage.getItem('terminal_settings')).showTerminalScrollbar).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'hidden' }));
+    expect(JSON.parse(localStorage.getItem('terminal_settings')).showTerminalScrollbar).toBe(true);
     first.unmount();
     render(<ScrollbarSetting />);
-    expect(screen.getByRole('button', { name: 'hidden' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'shown' })).toBeInTheDocument();
   });
   it('defaults the mobile font size to a readable 11px', () => {
     expect(DEFAULT_FONT_SIZE_MOBILE).toBe(11);

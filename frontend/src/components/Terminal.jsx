@@ -696,6 +696,8 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
       term,
       isActive: () => isActiveRef.current,
       isFocused: () => isFocusedRef.current,
+      isVisible: () => !document.hidden,
+      isMobile: () => isMobileRef.current,
       // ref 로 읽는다 — 이북 모드를 켜고 끄는 데 소켓을 다시 열 이유는 없다.
       isEink: () => isEinkRef.current,
       onServerOutput: () => predictiveEchoRef.current?.onServerOutput(),
@@ -732,7 +734,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
     const explicitWebgl = settings?.useWebgl;
     webglRef.current = createWebglController({
       term,
-      enabled: explicitWebgl === undefined ? !isMobileRef.current : explicitWebgl !== false,
+      enabled: !isMobileRef.current && explicitWebgl !== false,
       isActive: () => isActiveRef.current,
       debug: localStorage.getItem('debug_terminal') === '1',
     });
@@ -1154,6 +1156,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
     // busy on/off 가 깜빡 보였음). App.jsx 가 별도 윈도우로 fade-out 처리.
     let lastActivityDispatch = 0;
     const dispatchActivity = () => {
+      if (document.hidden) return;
       const now = Date.now();
       if (now - lastActivityDispatch < 100) return;
       lastActivityDispatch = now;
@@ -2147,7 +2150,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
       <style>{TERMINAL_CSS}</style>
 
       {/* 스켈레톤: 첫 콘텐츠가 그려지기 전까지 표시 */}
-      {!hasContent && <TerminalSkeleton themeUi={themeUi} />}
+      {isActive && !hasContent && <TerminalSkeleton themeUi={themeUi} />}
 
       {/* 로딩이 오래 멈춰 있을 때 — 어느 쪽(이 기기 vs 서버) 문제인지 명시하고,
           그 상황에서 실제로 되는 선택지만 준다. */}
@@ -2207,7 +2210,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
         fitNowRef={fitNowRef}
         sessionId={hostId ? (effectiveTmuxSession || tmuxSessionName) : sessionId}
         hostId={hostId}
-        enabled={settings.showTerminalScrollbar !== false}
+        enabled={settings.showTerminalScrollbar === true}
         showInputOnScroll={settings.showInputOnScroll === true}
         inputPreviewRef={inputPreviewRef}
         historyKey={sessionId}

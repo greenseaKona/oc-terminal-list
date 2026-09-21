@@ -201,10 +201,10 @@ describe('attachTerminalInteractions', () => {
   });
 
   describe('모바일 터치', () => {
-    it('세로 드래그는 스크롤한다', () => {
+    it('세로 드래그는 스크롤한다 (감쇠 ×0.5)', () => {
       mount();
       overlay.dispatchEvent(touchEvent('touchstart', 100, 200));
-      overlay.dispatchEvent(touchEvent('touchmove', 100, 140)); // 위로 60px
+      overlay.dispatchEvent(touchEvent('touchmove', 100, 80)); // 위로 120px → 감쇠 후 60px
 
       expect(term.scrollLines).toHaveBeenCalledWith(3);
     });

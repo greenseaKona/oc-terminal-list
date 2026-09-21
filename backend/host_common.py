@@ -12,6 +12,13 @@ from sqlite_storage import storage
 logger = logging.getLogger(__name__)
 
 
+def force_shquote(value: str) -> str:
+    """Quote even when shlex would not: a leading '=' is safe for POSIX sh but
+    zsh (the remote login shell) expands unquoted '=word' as a command path,
+    so tmux exact-match targets like `=session:` must always stay quoted."""
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
 async def resolve_host_with_secrets(host_id: str, username: str) -> tuple:
     host = await storage.get_host(host_id, username)
     if not host:

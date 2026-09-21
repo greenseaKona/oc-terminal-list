@@ -77,6 +77,27 @@ class ScrollHistoryTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("INJECTED", result.stdout)
 
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is required for remote login-shell compatibility")
+    def test_seek_script_runs_under_zsh(self):
+        output = subprocess.check_output(
+            ["zsh", "-fc", scroll_script(self.base, "history", 40)],
+            env=self.env,
+            text=True,
+            timeout=3,
+        )
+
+        self.assertEqual(parse_state(output)["offset"], 40)
+        self.state(0)
+
+    def test_seek_batches_metadata_and_mutation_commands(self):
+        script = scroll_script(self.base, "history", 40)
+
+        self.assertTrue(script.startswith("state=$("))
+        self.assertNotIn("pane=$(", script)
+        self.assertNotIn("mode=$(", script)
+        self.assertNotIn("hist=$(", script)
+        self.assertIn(r"\;", script)
+
     def test_malformed_or_other_mode_is_unavailable(self):
         self.assertEqual(parse_state(""), {"available": False})
         self.assertFalse(parse_state("%1|20|0|24|tree-mode")["available"])

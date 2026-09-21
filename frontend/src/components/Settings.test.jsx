@@ -16,6 +16,13 @@ const fullSettings = {
 };
 
 describe('Settings', () => {
+  it('shows the terminal scrollbar toggle off when no preference was saved', () => {
+    render(<Settings isOpen onClose={vi.fn()} settings={fullSettings} onSave={vi.fn()} />);
+
+    expect(screen.getByRole('switch', { name: /Show terminal scrollbar/ }))
+      .toHaveAttribute('aria-checked', 'false');
+  });
+
   it('places the Korean input preview option directly after the scrollbar and saves it', () => {
     const onSave = vi.fn();
     render(<Settings isOpen onClose={vi.fn()} settings={{ ...fullSettings, language: 'ko' }} onSave={onSave} />);

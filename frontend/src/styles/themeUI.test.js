@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildThemeUI, isLight } from './themeUI';
+import { buildThemeUI, isLight, readableForeground } from './themeUI';
 
 /* Nothing here throws when it is wrong — a bad mix just produces a colour, and the only
    way to notice is to look at the screen. So the tests assert the property that matters:
@@ -59,5 +59,19 @@ describe('buildThemeUI', () => {
 
   it('reads the eink theme as a light theme', () => {
     expect(isLight('#ffffff')).toBe(true);
+  });
+});
+
+describe('readableForeground', () => {
+  it('keeps a readable preferred color', () => {
+    expect(readableForeground('#ffffff', '#111111')).toBe('#111111');
+  });
+
+  it('uses light text when an ANSI background makes the preferred color unreadable', () => {
+    expect(readableForeground('#3c4048', '#111111')).toBe('#ffffff');
+  });
+
+  it('accepts rgb backgrounds from xterm palette colors', () => {
+    expect(readableForeground('rgb(245, 245, 245)', '#eeeeee')).toBe('#000000');
   });
 });
