@@ -1,5 +1,6 @@
 /** 상단 경로 표시 — 현재 pane 의 cwd 를 접은 형태로 보여주고 새로고침을 건다. */
-import { memo, useState, useEffect } from 'react';
+import { memo, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { RefreshCw, Monitor, Server } from 'lucide-react';
 import { tokens } from '../../styles/tokens';
 import HostIcon from '../../utils/hostIcons';
@@ -9,6 +10,12 @@ const { color, font, fontSize } = tokens;
 
 const CwdBreadcrumb = memo(({ paneInfo, loading, disabled, ui, onRefreshCwd = null, t = null }) => {
   const [refreshing, setRefreshing] = useState(false);
+  const [pathHintVisible, setPathHintVisible] = useState(false);
+  const [pathHintMeasured, setPathHintMeasured] = useState(false);
+  const [pathHintPosition, setPathHintPosition] = useState({ top: 0, left: 0 });
+  const pathHintId = useId();
+  const pathRef = useRef(null);
+  const pathHintRef = useRef(null);
   // 로딩 스켈레톤 시간 제한 — 연결이 오래 걸려(=loading 이 계속 true) 상단 shimmer 바가 "되다 만"
   // 채로 영영 남는 게 거슬린다. 잠깐 뒤엔 폴백 경로(~/user@host)를 대신 보여 멈춘 바를 없앤다.
   const [skeletonExpired, setSkeletonExpired] = useState(false);
@@ -53,6 +60,28 @@ const CwdBreadcrumb = memo(({ paneInfo, loading, disabled, ui, onRefreshCwd = nu
     ? (displayPath || placeholderPath)
     : null;
   const isPlaceholder = !loading && !disabled && !displayPath;
+  const fullPath = rawPath || headerPath;
+
+  useEffect(() => {
+    setPathHintVisible(false);
+    setPathHintMeasured(false);
+  }, [fullPath, loading, disabled]);
+
+  useLayoutEffect(() => {
+    if (!pathHintVisible || !pathRef.current || !pathHintRef.current) return;
+    const trigger = pathRef.current.getBoundingClientRect();
+    const hint = pathHintRef.current.getBoundingClientRect();
+    const margin = 8;
+    const center = trigger.left + trigger.width / 2;
+    const left = Math.max(margin + hint.width / 2,
+      Math.min(window.innerWidth - margin - hint.width / 2, center));
+    const below = trigger.bottom + 6;
+    const top = below + hint.height <= window.innerHeight - margin
+      ? below
+      : Math.max(margin, trigger.top - hint.height - 6);
+    setPathHintPosition({ top, left });
+    setPathHintMeasured(true);
+  }, [pathHintVisible, fullPath]);
 
   const handleRefresh = async (e) => {
     e.preventDefault();
@@ -113,6 +142,16 @@ const CwdBreadcrumb = memo(({ paneInfo, loading, disabled, ui, onRefreshCwd = nu
   // placeholder 텍스트는 진짜 cwd 와 시각적으로 구분 — 살짝 흐리게 + italic.
 
   return (
+    <>
+    <style>{`
+      @keyframes iterm-cwd-tooltip-in {
+        from { opacity: 0; transform: translate(-50%, -3px); }
+        to { opacity: 1; transform: translate(-50%, 0); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .iterm-cwd-tooltip { animation: none !important; }
+      }
+    `}</style>
     <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', display: 'flex', alignItems: 'center', padding: '0 5px' }}>
       <div style={pillStyle}>
         <HostIcon
@@ -124,7 +163,13 @@ const CwdBreadcrumb = memo(({ paneInfo, loading, disabled, ui, onRefreshCwd = nu
         />
         {/* 좌측 정렬, 우측 말줄임 — 드래그 선택으로 복사 가능 */}
         <span
-          title={rawPath || headerPath}
+          ref={pathRef}
+          tabIndex={0}
+          aria-describedby={pathHintVisible ? pathHintId : undefined}
+          onPointerEnter={() => { setPathHintMeasured(false); setPathHintVisible(true); }}
+          onPointerLeave={() => setPathHintVisible(false)}
+          onFocus={() => { setPathHintMeasured(false); setPathHintVisible(true); }}
+          onBlur={() => setPathHintVisible(false)}
           style={{
             flex: 1,
             minWidth: 0,
@@ -172,6 +217,40 @@ const CwdBreadcrumb = memo(({ paneInfo, loading, disabled, ui, onRefreshCwd = nu
         )}
       </div>
     </div>
+    {pathHintVisible && fullPath && createPortal(
+      <div
+        ref={pathHintRef}
+        id={pathHintId}
+        role="tooltip"
+        className="iterm-cwd-tooltip"
+        style={{
+          position: 'fixed',
+          top: pathHintPosition.top,
+          left: pathHintPosition.left,
+          transform: 'translateX(-50%)',
+          maxWidth: 'calc(100vw - 16px)',
+          overflowWrap: 'anywhere',
+          whiteSpace: 'normal',
+          background: ui.surface1 || ui.surface0,
+          border: `1px solid ${ui.border || ui.surface1}`,
+          borderRadius: tokens.radius.sm,
+          padding: `${tokens.space['1']} ${tokens.space['2.5']}`,
+          color: ui.text,
+          boxShadow: tokens.shadow.md,
+          fontSize: tokens.fontSize['11'],
+          fontFamily: font.mono,
+          lineHeight: tokens.lineHeight.normal,
+          zIndex: 300000,
+          pointerEvents: 'none',
+          opacity: pathHintMeasured ? 1 : 0,
+          animation: pathHintMeasured ? `iterm-cwd-tooltip-in ${tokens.motion.fast}` : 'none',
+        }}
+      >
+        {fullPath}
+      </div>,
+      document.body
+    )}
+    </>
   );
 });
 

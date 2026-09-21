@@ -53,6 +53,13 @@ describe('TerminalHeader', () => {
     expect(railSkeletons(container).length).toBe(0);
   });
 
+  it('does not animate loading chrome while its pane is hidden', () => {
+    const { container } = render(
+      <TerminalHeader {...baseProps({ loading: true, isPaneVisible: false })} />
+    );
+    expect(railSkeletons(container).length).toBe(0);
+  });
+
   it('keeps the focus eye slot while loading and unfocused', () => {
     const { container } = render(<TerminalHeader {...baseProps({ loading: true, isFocused: false })} />);
     expect(screen.getByLabelText('paneUnfocused')).toBeTruthy();
@@ -146,6 +153,49 @@ describe('TerminalHeader', () => {
     const { container } = render(<TerminalHeader {...baseProps({ activeTabType: 'local' })} />);
     fireEvent.click(container.querySelector('[title="Info"]'));
     expect(container.querySelector('[tabindex="-1"]').style.backdropFilter).toMatch(/blur\(.*18px\)/);
+  });
+
+  it('preserves an open side panel while its pane is hidden without rendering it', async () => {
+    const props = baseProps({ activeTabType: 'local', isPaneVisible: true });
+    const result = render(<TerminalHeader {...props} />);
+    fireEvent.click(result.container.querySelector('[title="Info"]'));
+    const panel = result.container.querySelector('[tabindex="-1"]');
+    expect(panel).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    result.rerender(<TerminalHeader {...props} isPaneVisible={false} />);
+    expect(result.container.querySelector('[tabindex="-1"]')).toBe(panel);
+    expect(panel).toHaveStyle({ display: 'none' });
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    result.rerender(<TerminalHeader {...props} isPaneVisible />);
+    expect(result.container.querySelector('[tabindex="-1"]')).toBe(panel);
+    expect(panel).toHaveStyle({ display: 'flex' });
+  });
+
+  it('closes body-portaled menus when its pane becomes hidden', () => {
+    const props = baseProps({ isPaneVisible: true, terminalKey: 'local:1', onCloseTerminal: vi.fn() });
+    const result = render(<TerminalHeader {...props} />);
+    fireEvent.click(result.container.querySelector('[title="more"]'));
+    expect(screen.getByText('closeTerminal')).toBeInTheDocument();
+
+    result.rerender(<TerminalHeader {...props} isPaneVisible={false} />);
+    expect(screen.queryByText('closeTerminal')).not.toBeInTheDocument();
+  });
+
+  it('pauses the busy badge animation while its pane is hidden', () => {
+    const { container } = render(<TerminalHeader {...baseProps({ isPaneVisible: false, isBusy: true })} />);
+    expect(container.querySelector('[title="terminalBusy"] > span')).toHaveStyle({ animation: 'none' });
+  });
+
+  it('does not start Info polling for a hidden pane', () => {
+    localStorage.setItem('iterm:terminal-header-panel:v1:hidden-info', JSON.stringify({ activePanel: 'info', panelWidth: 320 }));
+    render(<TerminalHeader {...baseProps({
+      isPaneVisible: false,
+      paneInfo: { paneId: 'hidden-info', sessionId: 'local:hidden-info', tabType: 'local' },
+    })} />);
+
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('switches side panels with one click while another panel is open', async () => {

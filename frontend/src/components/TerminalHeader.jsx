@@ -92,6 +92,7 @@ const TerminalHeader = ({
 }) => {
   const panelTheme = themes[paneThemeId || settings?.theme] || themes.catppuccin;
   const panelUi = buildThemeUI(panelTheme);
+  const showLoading = loading && isPaneVisible;
   // 페이지 단위 스크롤 — 모바일에서는 물리 PgUp/PgDn 키가 없어서 가장 자주
   // 막히는 동작. xterm.js 의 viewport 를 직접 스크롤 (tmux scrollback 와는
   // 별개의 클라이언트 버퍼) 해 즉시 반응.
@@ -186,8 +187,16 @@ const TerminalHeader = ({
   }, []);
 
   useEffect(() => {
-    if (activePanel && panelRef.current) panelRef.current.focus();
-  }, [activePanel]);
+    if (!isPaneVisible) {
+      setRailMenu(null);
+      setHistoryMenu(null);
+      setSplitMenu(null);
+    }
+  }, [isPaneVisible]);
+
+  useEffect(() => {
+    if (isPaneVisible && activePanel && panelRef.current) panelRef.current.focus();
+  }, [activePanel, isPaneVisible]);
 
   useEffect(() => {
     const saved = readPanelState(panelStorageKey);
@@ -202,30 +211,30 @@ const TerminalHeader = ({
   }, [panelStorageKey, activePanel, panelWidth]);
 
   useEffect(() => {
-    if (!activePanel) return;
+    if (!activePanel || !isPaneVisible) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closePanel();
+      }
+    };
+    const handleMouseDown = (e) => {
+      if (rootRef.current?.contains(e.target)) return;
+      if (panelRef.current && !panelRef.current.contains(e.target)) {
+        closePanel();
+      }
+    };
     const id = setTimeout(() => {
-      const handleKeyDown = (e) => {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          e.stopPropagation();
-          closePanel();
-        }
-      };
-      const handleMouseDown = (e) => {
-        if (rootRef.current?.contains(e.target)) return;
-        if (panelRef.current && !panelRef.current.contains(e.target)) {
-          closePanel();
-        }
-      };
       document.addEventListener('keydown', handleKeyDown);
       document.addEventListener('mousedown', handleMouseDown);
-      return () => {
-        document.removeEventListener('keydown', handleKeyDown);
-        document.removeEventListener('mousedown', handleMouseDown);
-      };
     }, 0);
-    return () => clearTimeout(id);
-  }, [activePanel, closePanel]);
+    return () => {
+      clearTimeout(id);
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('mousedown', handleMouseDown);
+    };
+  }, [activePanel, closePanel, isPaneVisible]);
 
   const togglePanel = useCallback((id) => {
     setActivePanel((prev) => (prev === id ? null : id));
@@ -301,12 +310,13 @@ const TerminalHeader = ({
   }, [filePanelOpen, onFilePanelToggle, onFolderSelect]);
 
   useEffect(() => {
+    if (!isPaneVisible) return;
     if (activePanel === 'files') {
       onRefreshCwd?.();
     } else if (activePanel === 'git') {
       refreshGitChanges?.();
     }
-  }, [activePanel, onRefreshCwd, refreshGitChanges]);
+  }, [activePanel, isPaneVisible, onRefreshCwd, refreshGitChanges]);
 
   return (
     <div ref={rootRef} style={{ ...styles.root, borderTopColor: panelUi.border }}>
@@ -357,12 +367,12 @@ const TerminalHeader = ({
         borderBottomColor: panelUi.border,
       }}>
         {/* 로딩 중엔 핸들 자리만 비워둔다 — 로딩이 끝나며 레일 전체가 옆으로 밀리지 않게. */}
-        {!isMobile && loading && (
+        {!isMobile && showLoading && (
           <div style={{ width: '22px', height: '22px', marginRight: '1px', flexShrink: 0 }} aria-hidden="true" />
         )}
 
         {/* Far-left: drag/move handle affordance — empty panes can be dragged too */}
-        {!isMobile && !loading && (
+        {!isMobile && !showLoading && (
           <div
             title={t?.('paneHandle') || 'Move / split handle'}
             style={{
@@ -374,7 +384,7 @@ const TerminalHeader = ({
               flexShrink: 0,
               cursor: 'grab',
               marginRight: '1px',
-              pointerEvents: loading ? 'none' : 'auto',
+              pointerEvents: showLoading ? 'none' : 'auto',
               borderRadius: radius.md,
               color: panelUi.muted,
               transition: 'color 150ms, background 150ms',
@@ -406,9 +416,9 @@ const TerminalHeader = ({
           minWidth: 0,
           overflow: 'hidden',
           opacity: disabled ? 0.4 : 1,
-          pointerEvents: (disabled || loading) ? 'none' : 'auto',
+          pointerEvents: (disabled || showLoading) ? 'none' : 'auto',
         }}>
-          {loading ? (
+          {showLoading ? (
             <RailSkeleton count={TABS.length} compact ui={panelUi} gap="2px" />
           ) : (
             TABS.map(({ id, icon: Icon, label }) => {
@@ -442,7 +452,7 @@ const TerminalHeader = ({
           )}
         </div>
 
-        <CwdBreadcrumb paneInfo={paneInfo} loading={loading} disabled={disabled} ui={panelUi} onRefreshCwd={onRefreshCwd} t={t} />
+        <CwdBreadcrumb paneInfo={paneInfo} loading={showLoading} disabled={disabled} ui={panelUi} onRefreshCwd={onRefreshCwd} t={t} />
 
         <div style={{
           display: 'flex', flexDirection: 'row', alignItems: 'center',
@@ -516,7 +526,7 @@ const TerminalHeader = ({
                       boxShadow: isEvicted
                         ? `0 0 0 1.5px ${panelUi.base}, 0 0 5px ${panelUi.warning || '#f9e2af'}`
                         : `0 0 0 1.5px ${panelUi.base}, 0 0 5px ${panelUi.accent}`,
-                      animation: 'iterm-pane-busy-dot 1.15s ease-in-out infinite',
+                      animation: isPaneVisible ? 'iterm-pane-busy-dot 1.15s ease-in-out infinite' : 'none',
                       pointerEvents: 'none',
                     }} />
                   )}
@@ -526,10 +536,10 @@ const TerminalHeader = ({
             {/* Broadcast 토글은 TabBar(설정 버튼 옆)로 이동. 켜짐 상태는 pane 영역 우측 상단 배너로 표시. */}
 
             {/* Single split button — opens dropdown with left/right/up/down choices */}
-            {loading && onSplitPane && (
+            {showLoading && onSplitPane && (
               <RailSkeleton count={1} compact ui={panelUi} delayOffset={480} />
             )}
-            {!disabled && !loading && onSplitPane && (
+            {!disabled && !showLoading && onSplitPane && (
               <div ref={splitBtnRef}>
                 <RailIconBtn
                   icon={Columns2}
@@ -557,7 +567,7 @@ const TerminalHeader = ({
             {/* More menu button — hidden for empty panes (only one action → surfaced above) */}
             {!disabled && (
             <div ref={moreBtnRef}>
-              {loading ? (
+              {showLoading ? (
                 <RailSkeleton count={1} compact ui={panelUi} delayOffset={640} />
               ) : (
                 <RailIconBtn
@@ -575,7 +585,7 @@ const TerminalHeader = ({
       </div>
 
       {/* RailSubMenu — portal to document.body */}
-      {railMenu && createPortal(
+      {isPaneVisible && railMenu && createPortal(
         <RailSubMenu
           anchor={railMenu}
           ui={panelUi}
@@ -652,7 +662,7 @@ const TerminalHeader = ({
       )}
 
       {/* Per-terminal command history — anchored under the eye icon */}
-      {historyMenu && terminalKey && createPortal(
+      {isPaneVisible && historyMenu && terminalKey && createPortal(
         <CommandHistoryPopover
           anchor={historyMenu}
           terminalKey={terminalKey}
@@ -673,7 +683,7 @@ const TerminalHeader = ({
       )}
 
       {/* Split pane dropdown — portal to document.body */}
-      {splitMenu && createPortal(
+      {isPaneVisible && splitMenu && createPortal(
         <RailSubMenu
           anchor={splitMenu}
           ui={panelUi}
@@ -698,6 +708,7 @@ const TerminalHeader = ({
         <div
           ref={panelRef}
           tabIndex={-1}
+          aria-hidden={!isPaneVisible}
           style={{
             ...styles.panel,
             ...glassPanelStyle(panelUi, { boxShadow: 'none' }),
@@ -711,6 +722,7 @@ const TerminalHeader = ({
             zIndex: 10,
             outline: 'none',
             pointerEvents: 'auto',
+            display: isPaneVisible ? 'flex' : 'none',
           }}>
           {/* 리사이즈 드래그 핸들 — 패널 우측 가장자리 */}
           <div
@@ -809,6 +821,7 @@ const TerminalHeader = ({
                   info={paneInfo}
                   paneThemeId={paneThemeId}
                   globalThemeId={settings.theme}
+                  isVisible={isPaneVisible}
                   t={t}
                 />
               </div>
