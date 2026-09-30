@@ -20,9 +20,10 @@
   itl whoami                   지금 이 팬의 주소
   itl send <주소> <내용>        그 팬에 꽂는다 (`2.1` 이면 다른 기계여도 된다)
   itl read <주소>              그 팬의 최근 출력
+  itl sandbox-config           현재 팬의 Codex 샌드박스 허용 설정 출력
 
 ⚠️ 보내는 내용은 **남이 준 값**일 수 있다. 키 이름으로 해석되지 않게 전 경로에서
-리터럴로만 다룬다(tmux `send-keys -l`). 이걸 되돌리면 팬 하나가 남의 팬에 임의 키를
+리터럴로만 다룬다(tmux 버퍼 붙여넣기). 이걸 되돌리면 팬 하나가 남의 팬에 임의 키를
 넣는 통로가 된다.
 """
 from __future__ import annotations
@@ -32,6 +33,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -43,6 +45,30 @@ TIMEOUT_SEC = 5.0
 MAX_TEXT_BYTES = 8192
 
 TMUX = "tmux"
+
+
+class TmuxAccessError(OSError):
+    """The current process cannot query a tmux socket."""
+
+
+def raise_if_tmux_denied(err: str, socket: str) -> None:
+    """Keep a denied socket distinct from an empty or stale tmux server."""
+    if "operation not permitted" in err.lower() or "permission denied" in err.lower():
+        raise TmuxAccessError(
+            f"tmux 소켓 '{socket}' 접근 거부: {err.strip()}. "
+            "이 실행 환경에서 소켓 접근을 허용해야 한다; 같은 셸에서 재시도해도 해결되지 않는다"
+        )
+
+
+def codex_sandbox_config(socket: str) -> str:
+    """Return a socket-specific Codex permission profile without querying tmux."""
+    parent = os.path.dirname(socket)
+    return (f'default_permissions = "itl-tmux"\n\n'
+            '[features]\nnetwork_proxy = true\n\n'
+            '[permissions.itl-tmux]\nextends = ":workspace"\n\n'
+            f'[permissions.itl-tmux.filesystem]\n{json.dumps(parent)} = "read"\n\n'
+            '[permissions.itl-tmux.network]\nenabled = true\n\n'
+            f'[permissions.itl-tmux.network.unix_sockets]\n{json.dumps(socket)} = "allow"')
 
 #: 앱의 탭 주소(`탭.pane`). 이 모양은 **이 기계 밖일 수 있으므로** itl 이 직접 못 푼다 —
 #: 앱 백엔드만이 어느 호스트의 어느 세션인지 안다. 그래서 표식 한 줄로 넘긴다.
@@ -67,14 +93,18 @@ KEY_ENV = "ITL_KEY"
 #: 그 WS 브리지다) 배경 에이전트는 대개 안 붙어 있다 — 그때 표식은 조용히 사라진다.
 #: tmux 옵션은 붙어 있든 아니든 남고, 백엔드의 기존 1.5초 폴링이 같은 호출로 걷어 간다.
 TMUX_OUTBOX_OPTION = "@itl_outbox"
+TMUX_PENDING_OPTION = "@itl_pending"
+RECEIPT_PREFIX = "@itl_receipt_"
+REQUEST_ID_RE = re.compile(r"^[0-9a-f]{8,32}$")
 
 # ─── 프로세스 실행 ────────────────────────────────────────────────────────────
 
-def run(argv: list[str], *, timeout: float = TIMEOUT_SEC) -> tuple[int, str, str]:
+def run(argv: list[str], *, timeout: float = TIMEOUT_SEC, input_text: str | None = None) -> tuple[int, str, str]:
     """(returncode, stdout, stderr). **던지지 않는다** — 없는 멀티플렉서는 흔한 상태다."""
     try:
         p = subprocess.run(
-            argv, stdin=subprocess.DEVNULL, capture_output=True,
+            argv, stdin=None if input_text is not None else subprocess.DEVNULL,
+            input=input_text, capture_output=True,
             timeout=timeout, text=True, errors="replace",
         )
         return p.returncode, p.stdout or "", p.stderr or ""
@@ -196,9 +226,15 @@ def tmux_sockets() -> list[str]:
     base = f"/tmp/tmux-{os.getuid()}"
     try:
         names = sorted(os.listdir(base))
+    except PermissionError as exc:
+        raise TmuxAccessError(f"tmux 소켓 디렉터리 '{base}' 접근 거부: {exc}") from exc
     except OSError:
-        return []
-    return [os.path.join(base, n) for n in names]
+        names = []
+    sockets = [os.path.join(base, n) for n in names]
+    current = (os.environ.get("TMUX") or "").split(",", 1)[0]
+    if os.path.isabs(current) and current not in sockets:
+        sockets.append(current)
+    return sockets
 
 
 TMUX_FORMAT = (
@@ -235,8 +271,10 @@ def tmux_app_addr(binary: str, socket: str, session: str) -> str:
     하단 상태바의 `[1.2]` 와 **같은 값**이다. 그래서 팬 안의 에이전트가 "나는 2.1 이다"
     라고 말할 수 있다.
     """
-    code, out, _err = run([binary, "-S", socket, "show-options", "-qv",
+    code, out, err = run([binary, "-S", socket, "show-options", "-qv",
                            "-t", session, TMUX_ADDR_OPTION])
+    if code != 0:
+        raise_if_tmux_denied(err, socket)
     return out.strip() if code == 0 else ""
 
 
@@ -246,8 +284,9 @@ def discover_tmux() -> list[dict]:
         return []
     panes: list[dict] = []
     for sock in tmux_sockets():
-        code, out, _err = run([binary, "-S", sock, "list-panes", "-a", "-F", TMUX_FORMAT])
+        code, out, err = run([binary, "-S", sock, "list-panes", "-a", "-F", TMUX_FORMAT])
         if code != 0:
+            raise_if_tmux_denied(err, sock)
             continue          # 죽은 소켓 파일이 남아 있는 것은 흔하다
         found = parse_tmux_panes(out, sock)
         # 세션당 한 번만 묻는다 — 주소는 세션에 새겨져 있다.
@@ -322,16 +361,27 @@ def send_tmux(pane: dict, text: str, *, enter: bool) -> tuple[bool, str]:
     if not binary:
         return False, "tmux 가 없다"
     target = pane["native_id"]
-    # `-l` = 리터럴. 이게 없으면 "Enter" 나 "C-c" 같은 내용이 **키로 해석된다.**
-    # `--` 로 옵션 파싱을 끊어야 `-` 로 시작하는 내용이 플래그로 먹히지 않는다.
-    code, _out, err = run([binary, "-S", pane["socket"], "send-keys",
-                           "-t", target, "-l", "--", text])
+    base = [binary, "-S", pane["socket"]]
+    code, mode, err = run([*base, "display-message", "-p", "-t", target, "#{pane_in_mode}"])
     if code != 0:
-        return False, err.strip() or f"send-keys → {code}"
-    if enter:
-        code, _out, err = run([binary, "-S", pane["socket"], "send-keys", "-t", target, "Enter"])
+        return False, err.strip() or f"pane state → {code}"
+    if enter and mode.strip() == "1":
+        code, _out, err = run([*base, "send-keys", "-X", "-t", target, "cancel"])
         if code != 0:
-            return False, err.strip() or f"send-keys Enter → {code}"
+            return False, err.strip() or f"copy-mode cancel → {code}"
+    buffer = "itl-" + secrets.token_hex(8)
+    code, _out, err = run([*base, "load-buffer", "-b", buffer, "-"], input_text=text)
+    if code != 0:
+        return False, err.strip() or f"load-buffer → {code}"
+    # Framing keeps a TUI's paste-burst heuristic from consuming Enter as a newline.
+    # One tmux command queue keeps another sender out of the paste/Enter boundary.
+    args = [*base, "paste-buffer", "-p", "-r", "-d", "-b", buffer, "-t", target]
+    if enter:
+        args += [";", "send-keys", "-t", target, "Enter"]
+    code, _out, err = run(args)
+    if code != 0:
+        run([*base, "delete-buffer", "-b", buffer])
+        return False, err.strip() or f"paste/Enter → {code}"
     return True, ""
 
 
@@ -346,12 +396,22 @@ def put_outbox(line: str) -> bool:
     if not (tmux_env and pane and binary):
         return False
     socket = tmux_env.split(",", 1)[0]
-    code, _out, _err = run([binary, "-S", socket, "set-option", "-t", pane,
-                            TMUX_OUTBOX_OPTION, line])
-    return code == 0
+    payload = json.loads(line)
+    request_id = payload["n"]
+    if not REQUEST_ID_RE.fullmatch(request_id):
+        return False
+    target = shlex.quote(pane)
+    pending = f"set-option -t {target} {TMUX_PENDING_OPTION} {request_id} ; " if payload.get("receipt") is True else ""
+    command = (pending + f"set-option -t {target} {TMUX_OUTBOX_OPTION} {shlex.quote(line)} ; "
+               f"display-message -p queued ; wait-for -S {shlex.quote('itl-outbox-' + pane)}")
+    condition = f"#{{&&:#{{==:#{{{TMUX_PENDING_OPTION}}},}},#{{==:#{{{TMUX_OUTBOX_OPTION}}},}}}}"
+    code, out, _err = run([binary, "-S", socket, "if-shell", "-F", "-t", pane,
+                            condition, command, "display-message -p busy"])
+    return code == 0 and out.strip() == "queued"
 
 
-def send_app_addr(addr: str, text: str) -> tuple[bool, str]:
+def send_app_addr(addr: str, text: str, *, submit: bool = True,
+                  request_id: str | None = None, require_receipt: bool = False) -> tuple[bool, str]:
     """이 기계 밖일 수 있는 주소 — 표식 한 줄로 백엔드에 넘긴다.
 
     itl 은 여기서 **배달을 확인하지 못한다.** 크리덴셜이 없으니 그래야 맞고(그게 이
@@ -367,18 +427,72 @@ def send_app_addr(addr: str, text: str) -> tuple[bool, str]:
     if not key:
         # Without the key the bridge drops the line, so say so here instead of printing
         # a marker that goes nowhere. Panes the app did not open have no key.
-        return False, ("이 팬에는 열쇠가 없다 — 앱이 연 tmux 세션(또는 앱이 띄운 셸) 안에서만 "
-                       "다른 기계의 탭으로 보낼 수 있다")
+        return False, (f"'{addr}'을(를) 로컬 팬에서 찾지 못했고 이 팬에는 전송 열쇠가 없다. "
+                       "itl list로 대상 주소를, itl whoami로 현재 팬을 확인하라. "
+                       "다른 기계의 탭이면 앱이 연 팬에서 실행하라. "
+                       "현재 셸에서 같은 명령을 재시도해도 전달되지 않는다")
     # 개행이 있으면 표식 줄이 쪼개져 백엔드가 못 줍는다. JSON 이 알아서 이스케이프한다.
     # `n` is a per-send nonce: the bridge drops an identical line seen before (a `cat`ed
     # transcript would otherwise replay every send), and this keeps real repeats distinct.
-    payload = {"to": addr, "text": text, "key": key, "n": secrets.token_hex(4)}
+    payload = {"to": addr, "text": text, "key": key, "n": request_id or secrets.token_hex(4)}
+    if not submit:
+        payload["submit"] = False
+    if require_receipt:
+        payload["receipt"] = True
     line = json.dumps(payload, ensure_ascii=False)
     # **두 통로로 같이 낸다.** 표식은 붙어 있을 때 즉시, 우편함은 안 붙어 있어도 1.5초
     # 안에. 같은 `n` 이라 백엔드가 접으므로 두 번 꽂히지 않는다.
-    put_outbox(line)
-    print(SEND_MARKER + " " + line, flush=True)
+    queued = put_outbox(line)
+    if (require_receipt or os.environ.get("TMUX")) and not queued:
+        return False, "전송 우편함을 확보하지 못했다; 처리 중인 요청 또는 tmux 접근 권한을 확인하라"
+    if not require_receipt:
+        print(SEND_MARKER + " " + line, flush=True)
     return True, ""
+
+
+def receipt(request_id: str, *, timeout: float = 0) -> tuple[str, str]:
+    if not REQUEST_ID_RE.fullmatch(request_id):
+        return "", "요청 ID가 올바르지 않다"
+    socket = (os.environ.get("TMUX") or "").split(",", 1)[0]
+    pane = os.environ.get("TMUX_PANE") or ""
+    binary = tmux_bin()
+    if not (socket and pane and binary):
+        return "", "결과 확인은 요청을 보낸 tmux 팬에서 실행하라"
+    base = [binary, "-S", socket]
+    code, out, err = run([*base, "show-options", "-qv", "-t", pane, RECEIPT_PREFIX + request_id])
+    if code == 0 and out.strip():
+        return out.strip(), ""
+    if timeout > 0:
+        run([*base, "wait-for", "itl-receipt-" + request_id], timeout=timeout)
+        code, out, err = run([*base, "show-options", "-qv", "-t", pane, RECEIPT_PREFIX + request_id])
+        if code == 0 and out.strip():
+            return out.strip(), ""
+    return "", err.strip() or f"요청 {request_id} 결과 미확인; itl receipt {request_id}로 확인하라. 재전송하지 마라"
+
+
+def record_receipt(pane: dict, request_id: str, text: str) -> tuple[bool, str]:
+    if not REQUEST_ID_RE.fullmatch(request_id):
+        return False, "요청 ID가 올바르지 않다"
+    binary = tmux_bin()
+    if not binary:
+        return False, "tmux 가 없다"
+    target = pane["native_id"]
+    base = [binary, "-S", pane["socket"]]
+    _code, previous, _err = run([*base, "show-options", "-qv", "-t", target, "@itl_receipt_ids"])
+    history = [value for value in previous.split() if REQUEST_ID_RE.fullmatch(value) and value != request_id]
+    history.append(request_id)
+    clear = f"set-option -u -t {shlex.quote(target)} {TMUX_PENDING_OPTION}"
+    condition = f"#{{==:#{{{TMUX_PENDING_OPTION}}},{request_id}}}"
+    args = [*base, "set-option", "-t", target, RECEIPT_PREFIX + request_id, text,
+            ";", "set-option", "-t", target, "@itl_receipt_ids", " ".join(history[-64:])]
+    for stale in history[:-64]:
+        args += [";", "set-option", "-u", "-t", target, RECEIPT_PREFIX + stale]
+    args += [
+        ";", "if-shell", "-F", "-t", target, condition, clear, "",
+        ";", "wait-for", "-S", "itl-receipt-" + request_id,
+    ]
+    code, _out, err = run(args)
+    return code == 0, err.strip()
 
 
 def send(pane: dict, text: str, *, enter: bool = True) -> tuple[bool, str]:
@@ -445,9 +559,29 @@ def my_key() -> str:
     if not (tmux_env and pane and binary):
         return ""
     socket = tmux_env.split(",", 1)[0]
-    code, out, _err = run([binary, "-S", socket, "show-options", "-qv", "-t", pane,
+    code, out, err = run([binary, "-S", socket, "show-options", "-qv", "-t", pane,
                            TMUX_KEY_OPTION])
+    if code != 0:
+        raise_if_tmux_denied(err, socket)
     return out.strip() if code == 0 else ""
+
+
+def foreground_command(tty: str) -> list[str]:
+    """Read argv only from a process in this terminal's foreground group."""
+    code, out, _err = run(["ps", "-t", tty, "-o", "pid=,pgid=,tpgid="])
+    if code != 0:
+        return []
+    for row in out.splitlines():
+        fields = row.split()
+        if len(fields) != 3 or fields[1] != fields[2] or not fields[0].isdigit():
+            continue
+        try:
+            with open(f"/proc/{fields[0]}/cmdline", "rb") as process:
+                argv = process.read(65536).split(b"\0")
+        except OSError:
+            continue
+        return [arg.decode("utf-8", errors="replace") for arg in argv if arg]
+    return []
 
 
 def is_agent(pane: dict) -> bool:
@@ -459,7 +593,24 @@ def is_agent(pane: dict) -> bool:
     # ⚠️ Not the title. Any output can set a pane title (OSC 0/2), so a shell that
     # displayed a hostile page would read as "claude". `agent` is the foreground
     # *process name* (`pane_current_command`).
-    return bool(_AGENT_NAME_RE.search(pane.get("agent") or ""))
+    command = pane.get("agent") or ""
+    if _AGENT_NAME_RE.search(command):
+        return True
+    if command not in {"node", "bun", "deno"}:
+        return False
+    binary = tmux_bin()
+    if not binary:
+        return False
+    code, tty, _err = run([binary, "-S", pane["socket"], "display-message", "-p",
+                           "-t", pane["native_id"], "#{pane_tty}"])
+    if code != 0 or not tty.strip():
+        return False
+    argv = foreground_command(tty.strip())
+    if len(argv) < 2:
+        return False
+    script = argv[1].replace("\\", "/")
+    return (bool(_AGENT_NAME_RE.fullmatch(os.path.basename(script)))
+            or script.endswith(("/@anthropic-ai/claude-code/cli.js", "/@openai/codex/bin/codex.js")))
 
 
 # ─── 나는 누구인가 ───────────────────────────────────────────────────────────
@@ -511,6 +662,7 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("list", help="이 기계의 팬 전부")
     sub.add_parser("whoami", help="지금 이 팬의 주소")
+    sub.add_parser("sandbox-config", help="현재 팬의 Codex 샌드박스 소켓 허용 설정 출력")
 
     s = sub.add_parser("send", help="그 팬에 꽂는다")
     s.add_argument("addr")
@@ -518,6 +670,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--no-enter", action="store_true", help="내용만 넣고 엔터는 사람이")
     s.add_argument("--enter-if-agent", action="store_true",
                    help="에이전트 팬이면 엔터, 맨 셸이면 내용만 (백엔드가 대신 보낼 때의 규칙)")
+    s.add_argument("--wait", type=float, default=70, help="백엔드 전달 결과를 기다릴 초 (0이면 대기 없이 넘긴다)")
     # `--raw` used to skip a multiplexer-native "agent prompt" path. Kept as a no-op so an
     # installed older caller does not fail argument parsing.
     s.add_argument("--raw", action="store_true", help=argparse.SUPPRESS)
@@ -529,9 +682,53 @@ def main(argv: list[str] | None = None) -> int:
     r = sub.add_parser("read", help="그 팬의 최근 출력")
     r.add_argument("addr")
     r.add_argument("--lines", type=int, default=40)
+    q = sub.add_parser("receipt", help="요청 ID의 전달 결과 확인")
+    q.add_argument("request_id")
+    q.add_argument("--wait", type=float, default=0)
+    record = sub.add_parser("record-receipt", help=argparse.SUPPRESS)
+    record.add_argument("addr")
+    record.add_argument("request_id")
+    record.add_argument("text")
 
     args = ap.parse_args(argv)
-    panes = discover()
+    if args.cmd == "receipt":
+        out, error = receipt(args.request_id, timeout=max(0, min(args.wait, 90)))
+        if out:
+            print(out)
+            return 0 if json.loads(out).get("ok") is True else 3
+        print(json.dumps({"ok": False, "requestId": args.request_id, "delivery": "unknown", "error": error})
+              if args.json else error, file=sys.stdout if args.json else sys.stderr)
+        return 4
+    if args.cmd == "sandbox-config":
+        socket = (os.environ.get("TMUX") or "").split(",", 1)[0]
+        if not os.path.isabs(socket):
+            why = "TMUX 소켓 경로가 없다 — 앱의 tmux 팬 안에서 실행하라"
+            if args.json:
+                print(json.dumps({"ok": False, "error": why}, ensure_ascii=False))
+            else:
+                print(f"itl: {why}", file=sys.stderr)
+            return 2
+        instructions = ("샌드박스 바깥의 호스트 셸에서 ~/.codex/config.toml에 아래 값을 병합하라. "
+                        "기존 [features]가 있으면 "
+                        "network_proxy를 그 표에 넣어라. 기존 sandbox_mode/sandbox_workspace_write 및 "
+                        "실행 옵션 --sandbox/--yolo는 권한 프로필보다 우선하므로 제거하라. "
+                        "새 Codex 세션에서 적용된다")
+        config = codex_sandbox_config(socket)
+        if args.json:
+            print(json.dumps({"ok": True, "socket": socket, "config": config,
+                              "instructions": instructions}, ensure_ascii=False))
+        else:
+            print(f"{instructions}\n\n{config}")
+        return 0
+    try:
+        panes = discover()
+    except TmuxAccessError as exc:
+        if args.json:
+            print(json.dumps({"ok": False, "errorCode": "tmux_socket_denied", "retryable": False,
+                              "nextCommand": "itl sandbox-config", "error": str(exc)}, ensure_ascii=False))
+        else:
+            print(f"itl: {exc}. Codex 샌드박스 설정: itl sandbox-config", file=sys.stderr)
+        return 3
 
     if args.cmd == "list":
         if args.json:
@@ -555,11 +752,44 @@ def main(argv: list[str] | None = None) -> int:
     # 백엔드도 브라우저도 필요 없다. 못 풀면 그때만 표식으로 백엔드에 넘긴다.
     _local_hit, _ = resolve(panes, args.addr) if APP_ADDR_RE.match(args.addr.strip()) else (None, "")
     if args.cmd == "send" and APP_ADDR_RE.match(args.addr.strip()) and _local_hit is None:
-        ok, why = send_app_addr(args.addr.strip(), args.text)
+        socket_denied = False
+        request_id = secrets.token_hex(8)
+        waiting = args.wait > 0
+        try:
+            ok, why = send_app_addr(args.addr.strip(), args.text, submit=not args.no_enter,
+                                    request_id=request_id, require_receipt=waiting)
+        except TmuxAccessError as exc:
+            ok, why = False, str(exc)
+            socket_denied = True
+        if ok and waiting:
+            out, why = receipt(request_id, timeout=min(args.wait, 90))
+            if out:
+                result = json.loads(out)
+                if args.json:
+                    print(out)
+                else:
+                    labels = {"enter-sent": "입력·엔터 전달 확인", "typed": "입력만 전달 확인",
+                              "failed": "전달 실패", "unknown": "전달 결과 미확인"}
+                    label = labels.get(result["delivery"], "결과 미확인")
+                    detail = f" · {result['error']}" if result.get("error") else ""
+                    print(f"itl: {args.addr} · {label} · 요청 {request_id}{detail}")
+                return 0 if result.get("ok") is True else 3
+            result = {"ok": False, "handedOff": True, "requestId": request_id,
+                      "delivery": "unknown", "retryable": False, "error": why}
+            print(json.dumps(result, ensure_ascii=False) if args.json else f"itl: {why}",
+                  file=sys.stdout if args.json else sys.stderr)
+            return 4
         if args.json:
-            print(json.dumps({"ok": ok, "handedOff": ok, "error": why or None}, ensure_ascii=False))
+            result = {"ok": ok, "handedOff": ok, "requestId": request_id,
+                      "delivery": "queued" if ok else "failed",
+                      "enterSent": None, "error": why or None}
+            if socket_denied:
+                result.update(errorCode="tmux_socket_denied", retryable=False,
+                              nextCommand="itl sandbox-config")
+            print(json.dumps(result, ensure_ascii=False))
         elif not ok:
-            print(f"itl: {why}", file=sys.stderr)
+            hint = ". Codex 샌드박스 설정: itl sandbox-config" if socket_denied else ""
+            print(f"itl: {why}{hint}", file=sys.stderr)
         return 0 if ok else 3
 
     pane, why = resolve(panes, args.addr)
@@ -577,6 +807,11 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"ok": ok, "error": err or None}, ensure_ascii=False))
         elif not ok:
             print(f"itl: {err}", file=sys.stderr)
+        return 0 if ok else 3
+    if args.cmd == "record-receipt":
+        ok, error = record_receipt(pane, args.request_id, args.text)
+        if not ok:
+            print(error, file=sys.stderr)
         return 0 if ok else 3
 
     if args.cmd == "read":
@@ -598,9 +833,13 @@ def main(argv: list[str] | None = None) -> int:
         text = _CONTROL_RE.sub(" ", text)
     ok, err = send(pane, text, enter=enter)
     if args.json:
-        print(json.dumps({"ok": ok, "pane": pane, "error": err or None}, ensure_ascii=False))
+        print(json.dumps({"ok": ok, "pane": pane, "enterSent": bool(ok and enter),
+                          "delivery": ("enter-sent" if enter else "typed") if ok else "failed",
+                          "error": err or None}, ensure_ascii=False))
     elif not ok:
         print(f"itl: {err}", file=sys.stderr)
+    else:
+        print(f"itl: {args.addr} 입력 전달됨 · " + ("엔터 전송됨" if enter else "엔터 생략됨"))
     return 0 if ok else 3
 
 
