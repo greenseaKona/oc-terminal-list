@@ -1,6 +1,7 @@
 name: Build & Push to GHCR
 
 on:
+  pull_request:
   push:
     branches: [main, master]
     tags: ["v*.*.*"]
@@ -15,7 +16,46 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux openssh-client ripgrep
+          python -m venv .venv
+          .venv/bin/python -m pip install -r backend/requirements.txt pytest pytest-asyncio httpx ruff
+          npm ci --prefix frontend
+      - name: Critical Python lint
+        run: .venv/bin/ruff check backend --select E9,F63,F7,F82
+      - name: Backend tests (aggregate 4 GiB limit)
+        run: |
+          sudo systemd-run --wait --pipe --collect -p MemoryMax=4G -p MemorySwapMax=0 -p OOMPolicy=kill \
+            -p WorkingDirectory="$GITHUB_WORKSPACE/backend" \
+            /bin/bash "$GITHUB_WORKSPACE/.github/scripts/within-memory-limit.sh" \
+            "$GITHUB_WORKSPACE/.venv/bin/python" -m pytest -q
+      - name: Frontend tests (aggregate 4 GiB limit)
+        run: |
+          sudo systemd-run --wait --pipe --collect -p MemoryMax=4G -p MemorySwapMax=0 -p OOMPolicy=kill \
+            -p WorkingDirectory="$GITHUB_WORKSPACE/frontend" \
+            /bin/bash "$GITHUB_WORKSPACE/.github/scripts/within-memory-limit.sh" \
+            "$(command -v node)" node_modules/vitest/vitest.mjs run --maxWorkers=1
+      - name: Frontend build
+        working-directory: frontend
+        run: npm run build
+
   build-and-push:
+    if: github.event_name != 'pull_request'
+    needs: verify
     runs-on: ubuntu-latest
 
     steps:
