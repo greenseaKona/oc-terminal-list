@@ -14,6 +14,7 @@ MAX_BATCH_PATHS = 500  # 한 번에 다룰 경로 개수 상한 (zip 다운로�
 class FileWriteRequest(BaseModel):
     path: str = Field(max_length=MAX_PATH_FIELD_LEN)
     content: str = Field(max_length=MAX_FILE_WRITE_BYTES)
+    expected_revision: str | None = Field(default=None, alias="expectedRevision", pattern="^[0-9a-f]{64}$")
 
 
 class FileCreateRequest(BaseModel):
@@ -29,6 +30,7 @@ class FileMoveRequest(BaseModel):
 class HostFileWriteRequest(BaseModel):
     path: str = Field(max_length=MAX_PATH_FIELD_LEN)
     content: str = Field(max_length=MAX_FILE_WRITE_BYTES)
+    expected_revision: str | None = Field(default=None, alias="expectedRevision", pattern="^[0-9a-f]{64}$")
 
 
 class FilePathsRequest(BaseModel):

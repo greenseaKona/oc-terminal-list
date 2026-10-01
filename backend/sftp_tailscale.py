@@ -16,7 +16,11 @@ import logging
 import os
 import shlex
 import shutil
+import subprocess
 
+import anyio
+
+from file_revision import FileRevisionConflictError
 from host_manager import HostConnectError
 from sftp_pool import (
     CHUNK_BYTES,
@@ -226,58 +230,138 @@ async def write_file(host: dict, path: str, content: str | bytes) -> None:
     await upload_stream(host, path, _once())
 
 
-async def upload_stream(host: dict, path: str, chunks) -> int:
+_ATOMIC_UPLOAD_PY = """import hashlib, os, stat, sys, tempfile
+p=os.path.realpath(os.path.expanduser(sys.argv[1]))
+expected=sys.argv[2]
+def exact(n):
+    data=bytearray()
+    while len(data)<n:
+        part=sys.stdin.buffer.read(n-len(data))
+        if not part: raise EOFError('incomplete upload')
+        data.extend(part)
+    return data
+fd,tmp=tempfile.mkstemp(prefix='.iterm-write-',dir=os.path.dirname(p))
+try:
+    with os.fdopen(fd,'wb') as f:
+        while True:
+            n=int.from_bytes(exact(8),'big')
+            if n==0: break
+            if n>1048576: raise ValueError('upload chunk too large')
+            f.write(exact(n))
+        f.flush(); os.fsync(f.fileno())
+    if expected:
+        try:
+            digest=hashlib.sha256()
+            with open(p,'rb') as f:
+                while True:
+                    chunk=f.read(1048576)
+                    if not chunk: break
+                    digest.update(chunk)
+            current=digest.hexdigest()
+        except FileNotFoundError: current=None
+        if current!=expected:
+            print('__REVISION_CONFLICT__',file=sys.stderr); raise SystemExit(1)
+    if os.path.exists(p): os.chmod(tmp,stat.S_IMODE(os.stat(p).st_mode))
+    os.replace(tmp,p)
+finally:
+    if os.path.exists(tmp): os.unlink(tmp)
+"""
+
+
+async def upload_stream(host: dict, path: str, chunks, *, expected_revision: str | None = None) -> int:
     """청크를 원격 stdin 으로 흘려 파일에 쓴다. 반환값은 쓴 바이트 수.
 
-    `cat > path` 로 넘기므로 파일 크기와 무관하게 메모리를 잡지 않는다.
-    같은 이유로 base64 를 argv 에 실을 때 생기던 크기 한계와 `ps` 노출이 없다.
+    Length-prefixed chunks and an explicit terminator prevent partial stdin from committing.
     """
     target = target_for(host)
-    qpath = shlex.quote(path)
-    proc = await asyncio.create_subprocess_exec(
-        "tailscale", "ssh", target, f"cat > {qpath}",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    command = "python3 -c " + shlex.quote(_ATOMIC_UPLOAD_PY) + " " + shlex.quote(path)
+    command += " " + shlex.quote(expected_revision or "")
     written = 0
-    try:
-        async for chunk in chunks:
-            if not chunk:
-                continue
-            proc.stdin.write(chunk)
-            await proc.stdin.drain()
-            written += len(chunk)
-        proc.stdin.close()
-    except Exception:
-        proc.kill()
-        raise
-    _, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        err = (stderr or b"").decode(errors="replace").strip()
-        raise HostConnectError(f"tailscale write failed: {err[:200]}")
+    async with await anyio.open_process(
+        ["tailscale", "ssh", target, command], stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+    ) as proc:
+        assert proc.stdin is not None and proc.stderr is not None
+        stderr = bytearray()
+        try:
+            async for chunk in chunks:
+                for start in range(0, len(chunk), CHUNK_BYTES):
+                    part = chunk[start:start + CHUNK_BYTES]
+                    await proc.stdin.send(len(part).to_bytes(8, "big"))
+                    await proc.stdin.send(part)
+                    written += len(part)
+            await proc.stdin.send(bytes(8))
+            await proc.stdin.aclose()
+            async for part in proc.stderr:
+                stderr.extend(part[:max(0, 4096-len(stderr))])
+            await proc.wait()
+        finally:
+            if proc.returncode is None:
+                with anyio.move_on_after(5, shield=True):
+                    await proc.stdin.aclose()
+                    await proc.wait()
+                if proc.returncode is None:
+                    proc.kill()
+        if proc.returncode != 0:
+            err = stderr.decode(errors="replace").strip()
+            if "__REVISION_CONFLICT__" in err:
+                raise FileRevisionConflictError
+            raise HostConnectError(f"tailscale write failed: {err[:200]}")
     return written
 
 
 async def download_stream(host: dict, path: str):
     """원격 파일을 청크로 흘려 받는다 (단일 파일 전용)."""
     target = target_for(host)
-    qpath = shlex.quote(path)
-    proc = await asyncio.create_subprocess_exec(
-        "tailscale", "ssh", target, f"cat {qpath}",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
+    script = (
+        "import os,sys\n"
+        "with open(os.path.expanduser(sys.argv[1]),'rb') as f:\n"
+        "    while True:\n"
+        f"        chunk=f.read({CHUNK_BYTES})\n"
+        "        if not chunk: break\n"
+        "        sys.stdout.buffer.write(chunk)\n"
     )
-    try:
-        while True:
-            chunk = await proc.stdout.read(CHUNK_BYTES)
-            if not chunk:
-                break
-            yield chunk
-    finally:
-        if proc.returncode is None:
-            proc.kill()
-        await proc.wait()
+    command = f"python3 -c {shlex.quote(script)} {shlex.quote(path)}"
+    async with await anyio.open_process(
+        ["tailscale", "ssh", target, command], stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    ) as proc:
+        assert proc.stdout is not None
+        try:
+            async for chunk in proc.stdout:
+                yield chunk
+            if await proc.wait() != 0:
+                raise HostConnectError("tailscale download failed")
+        finally:
+            if proc.returncode is None:
+                proc.kill()
+                with anyio.move_on_after(5, shield=True):
+                    await proc.wait()
+
+
+async def file_info(host: dict, path: str) -> tuple[bool, int]:
+    """Stat a remote download and check file read access without buffering data."""
+    script = (
+        "import json,os,stat,sys\n"
+        "p=os.path.expanduser(sys.argv[1])\n"
+        "try:\n"
+        "    st=os.stat(p)\n"
+        "    if not stat.S_ISDIR(st.st_mode):\n"
+        "        if not stat.S_ISREG(st.st_mode): raise OSError('not a regular file')\n"
+        "        with open(p,'rb'): pass\n"
+        "    print(json.dumps([stat.S_ISDIR(st.st_mode),st.st_size]))\n"
+        "except FileNotFoundError: print('__NOT_FOUND__',file=sys.stderr)\n"
+        "except PermissionError: print('__FORBIDDEN__',file=sys.stderr)\n"
+    )
+    stdout, stderr = await run(target_for(host), _heredoc(script, path))
+    if b"__NOT_FOUND__" in stderr:
+        raise FileNotFoundError(path)
+    if b"__FORBIDDEN__" in stderr:
+        raise PermissionError(path)
+    if not stdout or stderr:
+        raise HostConnectError(f"tailscale stat failed: {stderr.decode(errors='replace')[:200]}")
+    is_dir, size = json.loads(stdout)
+    return is_dir, size
 
 
 # ─── 생성 / 이동 / 복사 / 삭제 / 권한 ─────────────────────────────────────────

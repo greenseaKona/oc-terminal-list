@@ -10,16 +10,21 @@ asyncssh SFTP 클라이언트로 원격 호스트의 목록/읽기/쓰기/전송
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import posixpath
 import shlex
 import stat
+import uuid
 import zipfile
+from typing import TypedDict
 
+import anyio
 import asyncssh
 
 import sftp_tailscale as _ts
+from file_revision import FileRevisionConflictError, remote_write_lock
 from host_manager import HostConnectError
 from sftp_pool import (
     CHUNK_BYTES,
@@ -40,7 +45,7 @@ __all__ = [
     "MAX_FILE_BYTES", "MAX_DOWNLOAD_BYTES", "MAX_DOWNLOAD_FILES", "MAX_REMOTE_PATH_LEN",
     "CHUNK_BYTES", "validate_remote_path", "close_pool",
     "list_directory", "read_file", "read_file_bytes",
-    "download_item", "download_items", "open_download",
+    "download_item", "download_items", "open_download", "download_info",
     "write_file", "upload_stream", "make_dirs", "path_exists",
     "create_item", "move_item", "copy_item", "delete_item", "chmod_item",
     "get_tmux_cwd", "get_tmux_cwds", "remote_home",
@@ -309,8 +314,6 @@ async def open_download(host: dict, secrets: dict, paths: list[str]):
             except (OSError, asyncssh.SFTPError) as e:
                 raise HostConnectError(f"path not found: {paths[0]}") from e
             single_file = not _is_dir_attrs(attrs)
-            if single_file and attrs.size is not None and attrs.size > MAX_DOWNLOAD_BYTES:
-                raise HostConnectError(f"download too large (>{MAX_DOWNLOAD_BYTES} bytes)")
     except Exception:
         await sftp_ctx.__aexit__(None, None, None)
         raise
@@ -351,7 +354,12 @@ async def open_download(host: dict, secrets: dict, paths: list[str]):
 
 
 async def _open_download_tailscale(host: dict, paths: list[str]):
-    """Tailscale 은 원격 python 이 묶어서 stdout 으로 뱉는다 — 여기서는 이미 받은 뒤 쪼갠다."""
+    """Single files stream from SSH stdout; ZIP generation retains its bounded buffer."""
+    if len(paths) == 1:
+        is_dir, _size = await _ts.file_info(host, paths[0])
+        if not is_dir:
+            filename = os.path.basename(paths[0].rstrip("/")) or "download"
+            return filename, "application/octet-stream", _ts.download_stream(host, paths[0])
     data, filename, media_type = await _ts.download_items(host, paths)
 
     async def gen():
@@ -361,12 +369,51 @@ async def _open_download_tailscale(host: dict, paths: list[str]):
     return filename, media_type, gen()
 
 
+class DownloadInfo(TypedDict):
+    filename: str
+    media_type: str
+    size: int | None
+
+
+async def download_info(host: dict, secrets: dict, path: str) -> DownloadInfo:
+    """Check remote existence/read access without transferring its contents."""
+    path = validate_remote_path(path)
+    if _is_tailscale(host):
+        is_dir, size = await _ts.file_info(host, path)
+    else:
+        conn = await _get_or_open(host, secrets)
+        async with conn.start_sftp_client() as sftp:
+            attrs = await sftp.stat(path)
+            is_dir = _is_dir_attrs(attrs)
+            size = attrs.size
+            if not is_dir:
+                async with sftp.open(path, "rb"):
+                    pass
+    name = os.path.basename(path.rstrip("/")) or "download"
+    if is_dir:
+        return {"filename": name if name.lower().endswith(".zip") else f"{name}.zip",
+                "media_type": "application/zip", "size": None}
+    return {"filename": name, "media_type": "application/octet-stream", "size": size}
+
+
 async def download_items(host: dict, secrets: dict, paths: list[str]) -> tuple[bytes, str, str]:
     """`open_download` 의 버퍼링 버전 — 작은 항목/테스트용."""
+    if _is_tailscale(host):
+        paths = [validate_remote_path(p) for p in paths]
+        if not paths:
+            raise HostConnectError("path is required")
+        return await _ts.download_items(host, paths)
+    if len(paths) == 1:
+        info = await download_info(host, secrets, paths[0])
+        if info["size"] is not None and info["size"] > MAX_DOWNLOAD_BYTES:
+            raise HostConnectError(f"download too large (>{MAX_DOWNLOAD_BYTES} bytes)")
     filename, media_type, gen = await open_download(host, secrets, paths)
     buf = bytearray()
     async for chunk in gen:
         buf += chunk
+        if len(buf) > MAX_DOWNLOAD_BYTES:
+            await gen.aclose()
+            raise HostConnectError(f"download too large (>{MAX_DOWNLOAD_BYTES} bytes)")
     return bytes(buf), filename, media_type
 
 
@@ -405,12 +452,23 @@ async def make_dirs(host: dict, secrets: dict, path: str) -> None:
 
 async def upload_stream(
     host: dict, secrets: dict, path: str, chunks, make_parents: bool = True,
+    *, expected_revision: str | None = None,
+) -> int:
+    """Serialize application writes to a destination, including Tailscale uploads."""
+    path = validate_remote_path(path)
+    lock = remote_write_lock(host["id"], posixpath.normpath(path))
+    async with lock:
+        return await _upload_stream_locked(host, secrets, path, chunks, make_parents,
+                                          expected_revision=expected_revision)
+
+
+async def _upload_stream_locked(
+    host: dict, secrets: dict, path: str, chunks, make_parents: bool,
+    *, expected_revision: str | None,
 ) -> int:
     """청크 async iterable 을 원격 파일로 흘려 쓴다. 반환값은 쓴 바이트 수.
 
-    파일 전체를 메모리에 올리지 않는 것이 요점이다 — 큰 파일 동시 업로드가 OOM 을
-    부르던 경로다. 중간에 실패하면 **반쪽 파일을 지운다**: 남겨두면 사용자는 전송이
-    끝났다고 믿고, 깨진 파일을 원본으로 쓴다.
+    Stage beside the destination and atomically replace it only after a complete transfer.
     """
     path = validate_remote_path(path)
     if _is_tailscale(host):
@@ -418,7 +476,7 @@ async def upload_stream(
             parent = posixpath.dirname(path)
             if parent:
                 await _ts.create_item(host, parent, "directory")
-        return await _ts.upload_stream(host, path, chunks)
+        return await _ts.upload_stream(host, path, chunks, expected_revision=expected_revision)
 
     host_id = host["id"]
     written = 0
@@ -430,19 +488,42 @@ async def upload_stream(
                 if parent:
                     await _sftp_makedirs(sftp, parent)
             try:
-                async with sftp.open(path, "wb") as f:
+                attrs = await sftp.stat(path)
+            except asyncssh.SFTPNoSuchFile:
+                attrs = None
+            if attrs is not None:
+                path = await sftp.realpath(path)
+            temporary = posixpath.join(posixpath.dirname(path), f".iterm-write-{uuid.uuid4().hex}")
+            try:
+                async with sftp.open(temporary, "xb") as f:
                     async for chunk in chunks:
                         if not chunk:
                             continue
                         await f.write(chunk)
                         written += len(chunk)
                         touch(host_id)
-            except Exception:
-                try:
-                    await sftp.remove(path)
-                except Exception:
-                    pass
-                raise
+                if expected_revision is not None:
+                    digest = hashlib.sha256()
+                    try:
+                        async with sftp.open(path, "rb") as original:
+                            while chunk := await original.read(CHUNK_BYTES):
+                                digest.update(chunk)
+                    except asyncssh.SFTPNoSuchFile:
+                        raise FileRevisionConflictError from None
+                    if digest.hexdigest() != expected_revision:
+                        raise FileRevisionConflictError
+                if attrs is not None and attrs.permissions is not None:
+                    await sftp.chmod(temporary, stat.S_IMODE(attrs.permissions))
+                # Unsupported atomic rename must fail safely, never unlink the destination.
+                await sftp.posix_rename(temporary, path)
+            finally:
+                with anyio.move_on_after(5, shield=True):
+                    try:
+                        await sftp.remove(temporary)
+                    except asyncssh.SFTPNoSuchFile:
+                        pass
+                    except (OSError, asyncssh.SFTPError) as cleanup_error:
+                        logger.warning("SFTP temporary cleanup failed: %s", cleanup_error)
         return written
     except HostConnectError:
         raise
@@ -451,14 +532,15 @@ async def upload_stream(
         raise HostConnectError(f"SFTP upload failed: {e}") from e
 
 
-async def write_file(host: dict, secrets: dict, path: str, content: str | bytes) -> None:
+async def write_file(host: dict, secrets: dict, path: str, content: str | bytes,
+                     *, expected_revision: str | None = None) -> None:
     """원격 파일 덮어쓰기 (에디터 저장/붙여넣기 같은 작은 내용 전용)."""
     data = content if isinstance(content, bytes) else content.encode("utf-8")
 
     async def _once():
         yield data
 
-    await upload_stream(host, secrets, path, _once(), make_parents=False)
+    await upload_stream(host, secrets, path, _once(), make_parents=False, expected_revision=expected_revision)
 
 
 async def path_exists(host: dict, secrets: dict, paths: list[str]) -> dict[str, bool]:

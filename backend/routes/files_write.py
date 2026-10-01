@@ -7,25 +7,34 @@
 from __future__ import annotations
 
 import logging
-import time
 import os
 import shutil
+import time
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File as FastAPIFile, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
+from fastapi import File as FastAPIFile
 
+import host_sftp
 from _deps import WORKSPACE_ROOT, validate_path, verify_auth_token
 from file_index import _invalidate_file_index
+from file_models import FileCreateRequest, FileMoveRequest, FileWriteRequest
+from file_revision import FileRevisionConflictError, atomic_write, content_revision
 from host_common import (
-    MAX_UPLOAD_FILES, MAX_UPLOAD_FILE_BYTES, MAX_UPLOAD_TOTAL_BYTES,
+    MAX_UPLOAD_FILE_BYTES,
+    MAX_UPLOAD_FILES,
+    MAX_UPLOAD_TOTAL_BYTES,
     resolve_host_with_secrets,
 )
 from host_manager import HostConnectError
-import host_sftp
 from paste_targets import (
-    local_paste_dir, remote_home_paste_dir, remote_paste_dir, safe_basename, stamped_name,
+    local_paste_dir,
+    remote_home_paste_dir,
+    remote_paste_dir,
+    safe_basename,
+    stamped_name,
 )
-from file_models import FileCreateRequest, FileMoveRequest, FileWriteRequest
+from upload_common import TransferBudget, read_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +44,14 @@ router = APIRouter(tags=["files"])
 @router.post("/api/files/write")
 async def write_file(request: FileWriteRequest, username: str = Depends(verify_auth_token)):
     safe = validate_path(request.path, allow_root=False)
-    safe.parent.mkdir(parents=True, exist_ok=True)
-    safe.write_text(request.content, encoding="utf-8")
-    return {"status": "written", "path": request.path}
+    data = request.content.encode("utf-8")
+    try:
+        atomic_write(safe, data, request.expected_revision)
+    except FileRevisionConflictError:
+        raise HTTPException(
+            status_code=409, detail="파일이 외부에서 변경되었습니다. 다시 읽고 저장해 주세요.",
+        ) from None
+    return {"status": "written", "path": request.path, "revision": content_revision(data)}
 
 
 @router.post("/api/files/move")
@@ -228,10 +242,6 @@ async def _remote_paste_dirs(host_id: str, host: dict, secrets: dict):
 
 async def _save_remote_paste(host_id: str, username: str, file: UploadFile, filename: str) -> dict:
     """원격 호스트의 temp 폴더로 SFTP 업로드. /tmp 가 막힌 호스트는 홈으로 떨어진다."""
-    content = await file.read(MAX_UPLOAD_FILE_BYTES + 1)
-    if len(content) > MAX_UPLOAD_FILE_BYTES:
-        raise HTTPException(status_code=413, detail=f"파일이 너무 큽니다 (최대 {MAX_UPLOAD_FILE_BYTES} bytes)")
-
     host, secrets = await resolve_host_with_secrets(host_id, username)
     last_error: Exception | None = None
     async for remote_dir in _remote_paste_dirs(host_id, host, secrets):
@@ -242,7 +252,12 @@ async def _save_remote_paste(host_id: str, username: str, file: UploadFile, file
                 await host_sftp.create_item(host, secrets, remote_dir, "directory")
             except Exception:
                 pass
-            await host_sftp.write_file(host, secrets, remote_path, content)
+            await file.seek(0)
+            budget = TransferBudget(MAX_UPLOAD_FILE_BYTES, MAX_UPLOAD_FILE_BYTES)
+            chunks = read_chunks(file, on_bytes=lambda n, b=budget: b.add(n, filename))
+            written = await host_sftp.upload_stream(host, secrets, remote_path, chunks)
+        except HTTPException:
+            raise
         except Exception as e:
             last_error = e
             logger.warning("paste SFTP failed (%s, %s): %s", host_id, remote_path, e)
@@ -253,7 +268,7 @@ async def _save_remote_paste(host_id: str, username: str, file: UploadFile, file
         if _cached_paste_dir(host_id) != remote_dir:
             logger.info("paste dir for %s -> %s", host_id, remote_dir)
         _paste_dir_by_host[host_id] = (remote_dir, time.time())
-        return {"status": "uploaded", "path": remote_path, "size": len(content),
+        return {"status": "uploaded", "path": remote_path, "size": written,
                 "scope": "host", "host_id": host_id}
 
     if isinstance(last_error, HostConnectError):
@@ -305,5 +320,3 @@ async def delete_file(path: str = Query(...), username: str = Depends(verify_aut
         safe.unlink()
     _invalidate_file_index()
     return {"status": "deleted", "path": path}
-
-

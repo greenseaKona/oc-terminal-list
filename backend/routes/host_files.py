@@ -10,6 +10,7 @@ import mimetypes
 import os
 from urllib.parse import quote
 
+import asyncssh
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 
@@ -17,6 +18,7 @@ import host_sftp
 import multiplexer as mux
 from _deps import verify_auth_token
 from file_models import FilePathsRequest
+from file_revision import content_revision
 from host_common import resolve_host_with_secrets
 from host_manager import HostConnectError
 
@@ -116,10 +118,11 @@ async def read_host_file(
 ):
     host, secrets = await resolve_host_with_secrets(host_id, username)
     try:
-        content = await host_sftp.read_file(host, secrets, path)
+        data = await host_sftp.read_file_bytes(host, secrets, path)
     except Exception as e:
         raise _fail("read", host_id, path, e, "원격 파일 읽기 실패")
-    return {"content": content, "path": path, "host_id": host_id}
+    return {"content": data.decode("utf-8", errors="replace"), "path": path,
+            "host_id": host_id, "revision": content_revision(data)}
 
 
 @router.get("/files/download")
@@ -208,10 +211,20 @@ async def head_host_file_download(
     path: str = Query(..., description="원격 파일 경로 (절대 권장)"),
     username: str = Depends(verify_auth_token),
 ):
-    await resolve_host_with_secrets(host_id, username)
-    filename = os.path.basename(path.rstrip("/")) or "download"
+    host, secrets = await resolve_host_with_secrets(host_id, username)
+    try:
+        info = await host_sftp.download_info(host, secrets, path)
+    except (FileNotFoundError, asyncssh.SFTPNoSuchFile):
+        raise HTTPException(status_code=404, detail="원격 파일을 찾을 수 없습니다.") from None
+    except (PermissionError, asyncssh.SFTPPermissionDenied):
+        raise HTTPException(status_code=403, detail="원격 파일을 읽을 권한이 없습니다.") from None
+    except (OSError, asyncssh.Error, HostConnectError) as e:
+        raise _fail("download", host_id, path, e, "원격 다운로드 실패") from e
+    headers = _attachment_headers(info["filename"])
+    if info["size"] is not None:
+        headers["Content-Length"] = str(info["size"])
     return Response(
         status_code=200,
-        media_type="application/octet-stream",
-        headers=_attachment_headers(filename),
+        media_type=info["media_type"],
+        headers=headers,
     )

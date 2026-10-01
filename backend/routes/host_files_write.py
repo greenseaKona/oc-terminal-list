@@ -13,16 +13,17 @@ import posixpath
 from fastapi import (
     APIRouter,
     Depends,
-    File as FastAPIFile,
     Form,
     HTTPException,
     Query,
     UploadFile,
 )
+from fastapi import File as FastAPIFile
 
 import host_sftp
 from _deps import verify_auth_token
 from file_models import FileChmodRequest, FileCreateRequest, FileMoveRequest, HostFileWriteRequest
+from file_revision import FileRevisionConflictError, content_revision
 from host_common import (
     MAX_REMOTE_PATH_LEN,
     MAX_UPLOAD_FILE_BYTES,
@@ -53,10 +54,16 @@ async def write_host_file(
 ):
     host, secrets = await resolve_host_with_secrets(host_id, username)
     try:
-        await host_sftp.write_file(host, secrets, request.path, request.content)
+        await host_sftp.write_file(host, secrets, request.path, request.content,
+                                   expected_revision=request.expected_revision)
+    except FileRevisionConflictError:
+        raise HTTPException(
+            status_code=409, detail="파일이 외부에서 변경되었습니다. 다시 읽고 저장해 주세요.",
+        ) from None
     except Exception as e:
         raise _fail("write", host_id, request.path, e, "원격 파일 쓰기 실패")
-    return {"status": "written", "path": request.path, "host_id": host_id}
+    return {"status": "written", "path": request.path, "host_id": host_id,
+            "revision": content_revision(request.content.encode("utf-8"))}
 
 
 @router.post("/files/create")
