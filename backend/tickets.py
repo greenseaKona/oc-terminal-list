@@ -14,6 +14,7 @@ import time
 from fastapi import HTTPException
 
 from _deps import validate_path
+from auth_sessions import current_session
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,8 @@ def _create_ws_ticket(username: str, path: str) -> tuple[str, float]:
     _cleanup_ws_tickets(now)
     ticket = secrets_mod.token_urlsafe(32)
     expires_at = now + WS_TICKET_TTL_SECONDS
-    _ws_tickets[ticket] = {"username": username, "path": _normalize_ws_path(path), "expires_at": expires_at}
+    _ws_tickets[ticket] = {"username": username, "path": _normalize_ws_path(path), "expires_at": expires_at,
+                           "session": current_session.get()}
     return ticket, expires_at
 
 
@@ -70,6 +72,10 @@ def _consume_ws_ticket(ticket: str | None, path: str) -> str | None:
         return None
     if meta.get("path") != _normalize_ws_path(path):
         return None
+    session = meta.get("session")
+    if session is not None and not session.active:
+        return None
+    current_session.set(session)
     return meta.get("username")
 
 
@@ -83,6 +89,9 @@ async def _push_ws_tickets(bridge, username: str, ws_path: str) -> None:
     import json as _json
     try:
         while True:
+            session = current_session.get()
+            if session is not None and not session.active:
+                return
             tk, exp = _create_ws_ticket(username, ws_path)
             await bridge.send_control(_json.dumps({"type": "ws_ticket", "ticket": tk, "expires_at": exp}))
             await asyncio.sleep(WS_TICKET_PUSH_INTERVAL_SECONDS)
@@ -107,7 +116,8 @@ def _create_file_ticket(username: str, path: str) -> tuple[str, float]:
     safe = validate_path(path)
     ticket = secrets_mod.token_urlsafe(32)
     expires_at = now + FILE_TICKET_TTL_SECONDS
-    _file_tickets[ticket] = {"username": username, "path": str(safe), "expires_at": expires_at}
+    _file_tickets[ticket] = {"username": username, "path": str(safe), "expires_at": expires_at,
+                            "session": current_session.get()}
     return ticket, expires_at
 
 
@@ -119,6 +129,10 @@ def _consume_file_ticket(ticket: str | None) -> str | None:
     meta = _file_tickets.pop(ticket, None)
     if not meta or meta.get("expires_at", 0) <= now:
         return None
+    session = meta.get("session")
+    if session is not None and not session.active:
+        return None
+    current_session.set(session)
     return meta.get("path")
 
 
@@ -135,7 +149,8 @@ def _create_sse_ticket(username: str) -> str:
     for t in expired:
         _sse_tickets.pop(t, None)
     ticket = secrets_mod.token_urlsafe(32)
-    _sse_tickets[ticket] = {"username": username, "expires_at": now + SSE_TICKET_TTL_SECONDS}
+    _sse_tickets[ticket] = {"username": username, "expires_at": now + SSE_TICKET_TTL_SECONDS,
+                           "session": current_session.get()}
     return ticket
 
 
@@ -145,5 +160,8 @@ def _consume_sse_ticket(ticket: str | None) -> str | None:
     meta = _sse_tickets.pop(ticket, None)
     if not meta or meta["expires_at"] <= time.time():
         return None
+    session = meta.get("session")
+    if session is not None and not session.active:
+        return None
+    current_session.set(session)
     return meta["username"]
-

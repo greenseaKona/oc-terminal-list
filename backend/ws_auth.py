@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 from fastapi import WebSocket
 
 from _deps import AUTH_COOKIE_NAME, get_auth_manager
+from auth_sessions import current_session
 from tickets import _consume_ws_ticket
 
 logger = logging.getLogger(__name__)
@@ -68,8 +69,12 @@ async def authenticate_ws(websocket: WebSocket, ws_path: str, ticket: str | None
     1) 티켓이 유효하면 소비하고 그 username.
     2) 아니면 Origin 검사를 통과한 경우에 한해 same-origin 쿠키(iterm_auth)로 인증.
     """
+    current_session.set(None)
     username = _consume_ws_ticket(ticket, ws_path) if ticket else None
     if username:
+        session = current_session.get()
+        if session is not None:
+            session.sockets.add(websocket)
         return username
 
     if not _origin_ok(websocket):
@@ -83,7 +88,11 @@ async def authenticate_ws(websocket: WebSocket, ws_path: str, ticket: str | None
     try:
         # verify_token 은 scoped(ITL 등)·otp_pending 토큰을 거부한다 — 일반 쿠키 인증과
         # 동일 신뢰수준. 티켓이 새는 것보다 나쁘지 않다.
-        return await mgr.verify_token(token)
+        username = await mgr.verify_token(token)
+        session = current_session.get()
+        if username and session is not None:
+            session.sockets.add(websocket)
+        return username
     except Exception as e:
         logger.debug("WS 쿠키 폴백 인증 실패 (%s): %s", ws_path, type(e).__name__)
         return None

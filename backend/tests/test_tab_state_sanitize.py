@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from db.user_prefs import TabStateSaveResult
 from routes import user_state  # tab-state 로직은 main 에서 분리됨
 
 
@@ -64,15 +65,17 @@ async def test_get_preserves_address_counter_when_highest_tab_is_pruned(monkeypa
         "nextTabAddressNumber": 9,
         "updatedAt": "before",
     }))
-    save = AsyncMock(return_value="after")
-    monkeypatch.setattr(user_state.storage, "save_tab_state", save)
+    save = AsyncMock(return_value=TabStateSaveResult("saved", {
+        "tabs": [alive], "activeTabId": "t1", "nextTabAddressNumber": 9, "updatedAt": "after",
+    }))
+    monkeypatch.setattr(user_state.storage, "save_tab_state_checked", save)
 
     with patch.object(user_state.local_mux, "live_session_names", AsyncMock(return_value=_live("alive"))):
         result = await user_state.get_tab_state("admin")
 
     assert result["tabs"] == [alive]
     assert result["nextTabAddressNumber"] == 9
-    save.assert_awaited_once_with("admin", [alive], "t1", 9)
+    save.assert_awaited_once_with("admin", [alive], "t1", 9, if_match="before")
 
 
 @pytest.mark.anyio

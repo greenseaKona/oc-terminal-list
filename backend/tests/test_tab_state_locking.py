@@ -7,11 +7,14 @@ ifMatch 없음 → 200 (초기 save 허용).
 """
 from unittest.mock import AsyncMock, patch
 
+import anyio
 import pytest
 from fastapi.testclient import TestClient
 
 import main
+from db.user_prefs import TabStateSaveResult
 from routes import user_state  # tab-state 로직은 main 에서 분리됨
+from sqlite_storage import SQLiteStorage
 
 
 @pytest.fixture
@@ -24,13 +27,40 @@ def client():
 
 
 @pytest.fixture
-def storage_mock():
+def storage_mock(tmp_path):
     """storage 의 호출되는 메소드들을 모두 mock."""
     with patch.object(user_state, "storage", autospec=False) as m:
         m.get_tab_state_updated_at = AsyncMock(return_value=None)
         m.get_tab_state = AsyncMock(return_value=None)
         m.save_tab_state = AsyncMock(return_value="2026-05-18T03:00:00")
-        yield m
+        store = SQLiteStorage(str(tmp_path / "tabs.db"))
+
+        async def checked(username, tabs, active_tab_id, next_tab_address_number=1, *, if_match=None):
+            existing = m.get_tab_state.return_value
+            if existing:
+                await store.save_tab_state(
+                    username, existing["tabs"], existing["activeTabId"], existing.get("nextTabAddressNumber", 1),
+                )
+                conn = store._get_connection()
+                try:
+                    with conn:
+                        conn.execute("UPDATE tab_state SET updated_at=? WHERE username=?",
+                                     (existing["updatedAt"], username))
+                finally:
+                    store._release_connection(conn)
+            result = await store.save_tab_state_checked(
+                username, tabs, active_tab_id, next_tab_address_number, if_match=if_match,
+            )
+            if result.status == "saved":
+                version = await m.save_tab_state(username, tabs, active_tab_id, result.state["nextTabAddressNumber"])
+                result = TabStateSaveResult("saved", {**result.state, "updatedAt": version})
+            return result
+
+        m.save_tab_state_checked = checked
+        try:
+            yield m
+        finally:
+            anyio.run(store.close)
 
 
 @pytest.fixture
@@ -124,6 +154,31 @@ def test_put_with_identical_content_does_not_bump_version(client, storage_mock, 
         "nextTabAddressNumber": 8,
         "updatedAt": "2026-05-18T02:00:00",
     }
+    storage_mock.save_tab_state.assert_not_awaited()
+    notify.assert_not_called()
+
+
+def test_put_with_identical_content_ignores_stale_ifmatch(client, storage_mock, tmux_mock):
+    stored = {
+        "tabs": [{"id": "host:x", "type": "host", "panes": []}],
+        "activeTabId": "host:x",
+        "nextTabAddressNumber": 8,
+        "updatedAt": "2026-05-18T05:00:00",
+    }
+    storage_mock.get_tab_state_updated_at.return_value = stored["updatedAt"]
+    storage_mock.get_tab_state.return_value = stored
+
+    with patch.object(user_state, "_notify_tab_state_change") as notify:
+        res = client.put("/api/tab-state", json={
+            "tabs": stored["tabs"],
+            "activeTabId": stored["activeTabId"],
+            "nextTabAddressNumber": 8,
+            "ifMatch": "2026-05-18T02:00:00",
+        })
+
+    assert res.status_code == 200
+    assert res.json()["status"] == "unchanged"
+    assert res.json()["updatedAt"] == stored["updatedAt"]
     storage_mock.save_tab_state.assert_not_awaited()
     notify.assert_not_called()
 

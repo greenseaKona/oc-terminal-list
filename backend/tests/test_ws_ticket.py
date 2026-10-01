@@ -117,7 +117,12 @@ async def test_verify_auth_token_accepts_cookie_and_ignores_null_bearer(monkeypa
     ) == "admin"
 
 
-def test_verify_endpoint_promotes_legacy_bearer_to_cookie():
+def test_verify_endpoint_promotes_legacy_bearer_to_cookie(monkeypatch):
+    class FakeAuth:
+        async def verify_token(self, token):
+            return "admin" if token == "legacy-token" else None
+
+    monkeypatch.setattr(_deps, "_auth_manager", FakeAuth())
     main.app.dependency_overrides[main.verify_auth_token] = lambda: "admin"
     try:
         res = TestClient(main.app).get(
