@@ -16,7 +16,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pyotp
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError as JWTError
 
 from vault import decrypt_str, encrypt_str, enforce_secret_file_permissions
 

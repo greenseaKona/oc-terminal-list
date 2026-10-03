@@ -48,6 +48,7 @@ import { recordDisconnect, recordReconnect } from './terminal/reconnectDiag';
 import ensureXtermGlobalStyles from './terminal/xtermGlobalCss';
 import useTerminalApi from './terminal/useTerminalApi';
 import TerminalTexture from './TerminalTexture';
+import TerminalScrollbar from './terminal/TerminalScrollbar';
 
 // xterm 이 래퍼 크기를 그대로 따르게 고정. 분수 셀 잔여는 늘리지 않고
 // TerminalEdgeGutter 가 테마색 가장자리로 마감한다.
@@ -84,6 +85,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
   const terminalRef = useRef(null);
   const touchOverlayRef = useRef(null);
   const xtermRef = useRef(null);
+  const inputPreviewRef = useRef(null);
   const iosHangulRef = useRef(null);
   const fitAddonRef = useRef(null);
   const searchAddonRef = useRef(null);
@@ -1591,6 +1593,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
       // 히스토리가 한 글자씩 쪼개져 저장되는 노이즈가 심하다. 이 경로에서는 더 이상 캡처하지 않고,
       // 서버 히스토리는 sendData() 명시적 호출 경로 (Quick Input / 음성 / MobileToolbar 등) 만 캡처한다.
       // 단 대용량 paste/장문 bulk 입력은 네트워크 절체 때 복구할 수 있게 로컬 최근 5개에만 남긴다.
+      // The optional local-scroll preview separately saves complete Enter submissions, never IME fragments.
       if (looksLikeRecoverableBulkInput(data)) {
         try { pushLocalCommandHistory(sessionId, data); } catch { /* noop */ }
       }
@@ -1810,7 +1813,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
      (빠른입력·모바일바·팔레트) 양쪽으로 노출. 전부 ref 위에서만 동작한다. */
   const { copyAll } = useTerminalApi({
     refs: {
-      xtermRef, wsRef, searchAddonRef, iosHangulRef,
+      xtermRef, wsRef, searchAddonRef, iosHangulRef, inputPreviewRef,
       enqueueInputRef, forceScrollToBottomRef, fitNowRef, webglRef,
       lastDimsRef, evictedRef, endedRef, hasContentRef,
     },
@@ -2193,6 +2196,21 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
         right={edgeGutter.right}
         bottom={edgeGutter.bottom}
         themeUi={themeUi}
+      />
+
+      <TerminalScrollbar
+        xtermRef={xtermRef}
+        fitNowRef={fitNowRef}
+        sessionId={hostId ? (effectiveTmuxSession || tmuxSessionName) : sessionId}
+        hostId={hostId}
+        enabled={settings.showTerminalScrollbar !== false}
+        showInputOnScroll={settings.showInputOnScroll === true}
+        inputPreviewRef={inputPreviewRef}
+        historyKey={sessionId}
+        active={isActive}
+        ready={isReady}
+        theme={currentTheme}
+        t={t}
       />
 
       {/* 모바일 터치 오버레이: canvas 위에 깔아 touch-action:none + passive:false 스크롤 보장.
