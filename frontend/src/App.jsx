@@ -1591,12 +1591,16 @@ function App() {
               if (type === 'copy') {
                 const sel = session.getSelection?.();
                 if (sel) copyAndTell(sel);
-                else setNotification({ isOpen: true, message: t('noSelection') || 'No text selected', type: 'info' });
+                else setNotification({ isOpen: true, message: isMobile && mobileViewOnly ? t('mobileSelectionHint') : (t('noSelection') || 'No text selected'), type: 'info' });
               } else if (type === 'copyAll') {
                 const text = session.getBufferText?.() || '';
                 if (text) copyAndTell(text);
               } else if (type === 'viewAsText') {
                 setScreenDumpText(session.getBufferText?.() || '— empty —');
+              } else if (type === 'scrollToBottom') {
+                Promise.resolve(session.scrollToBottom?.()).then((ok) => {
+                  if (ok === false) setNotification({ isOpen: true, message: t('mobileBottomError'), type: 'error' });
+                }).catch(() => setNotification({ isOpen: true, message: t('mobileBottomError'), type: 'error' }));
               }
             }}
             language={settings.language}

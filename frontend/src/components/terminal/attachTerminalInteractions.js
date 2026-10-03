@@ -9,6 +9,7 @@ import {
 import { copyTextToClipboard, uploadImageAndGetPath, pasteWhenConnected, reportClientError } from './terminalHelpers';
 import { uploadWithRetry } from './uploadRetry';
 import { getLinkAtClient } from '../../utils/terminalLinkAt';
+import attachMobileViewSelection from './attachMobileViewSelection';
 
 /**
  * 터미널의 포인터/키보드 배선 — 휠·터치 스크롤 라우팅, 자연스러운 마우스 선택,
@@ -67,6 +68,7 @@ const attachTerminalInteractions = ({
   isMobile,
   isReadOnly = () => false,
   scrollReadOnly = null,
+  onFileLinkClick = null,
   sessionId,
   // 원격 pane 이면 붙여넣은 이미지가 **그 호스트에** 올라가야 한다.
   hostId = null,
@@ -376,6 +378,7 @@ const attachTerminalInteractions = ({
   let touchCancelled = false;
 
   const handleTouchStart = (e) => {
+    if (isReadOnly()) return;
     clearTimeout(longPressTimer);
     touchCancelled = e.touches.length !== 1;
     if (touchCancelled) return;
@@ -392,6 +395,7 @@ const attachTerminalInteractions = ({
   };
 
   const handleTouchMove = (e) => {
+    if (isReadOnly()) return;
     if (e.touches.length !== 1) return;
     clearTimeout(longPressTimer);
     const dy = touchStartY - e.touches[0].clientY; // 양수 = 손가락 위로
@@ -461,8 +465,12 @@ const attachTerminalInteractions = ({
     overlay.addEventListener('touchcancel', handleTouchCancel);
   }
 
+  const viewSelection = attachMobileViewSelection({ term, overlay, isReadOnly, setContextMenu, onFileLinkClick,
+    scroll: (deltaY, x, y) => handleScrollDelta(deltaY, 0, x, y, 'touch') });
+
   return {
     detach: () => {
+      viewSelection.detach();
       container.removeEventListener('mousedown', handleRightMouseDown, true);
       container.removeEventListener('contextmenu', handleContextMenu, true);
       container.removeEventListener('keydown', handleKeyDown);

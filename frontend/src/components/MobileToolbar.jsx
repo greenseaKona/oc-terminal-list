@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { MessageSquare, ClipboardPaste, Copy, FileText, Eye, Keyboard } from 'lucide-react';
+import { MessageSquare, ClipboardPaste, Copy, FileText, ArrowDownToLine } from 'lucide-react';
 import useTranslation from '../hooks/useTranslation';
 import { tokens } from '../styles/tokens';
 import { mobileKeysFor, sanitizeMobileKeys, splitPinnedAndScroll } from '../utils/mobileKeys';
@@ -288,19 +288,22 @@ const MobileToolbar = ({
               title={t(viewOnly ? 'mobileEnableInput' : 'mobileEnableView')}
               aria-label={t(viewOnly ? 'mobileEnableInput' : 'mobileEnableView')}
               onMouseDown={(e) => e.preventDefault()} onClick={onToggleViewOnly}>
-              {viewOnly ? <Eye size={14} /> : <Keyboard size={14} />}
               {modePending ? '…' : t(viewOnly ? 'mobileViewMode' : 'mobileInputMode')}
             </Key>
             <Divider />
           </div>
         )}
-        {viewOnly ? (
-          <div style={styles.row}>
-            <span style={{ color: color.text, fontSize: fontSize['11'], padding: '0 6px' }}>{t('mobileInputLocked')}</span>
-            <Key style={VIEW_CONTROL_STYLE} title={t('copyAll')} onClick={() => onAction?.('copyAll')}><Copy size={14} />{t('copyAll')}</Key>
-            <Key style={VIEW_CONTROL_STYLE} title={t('viewAsText')} onClick={() => onAction?.('viewAsText')}><FileText size={14} />{t('viewAsText')}</Key>
+        {viewOnly ? (<>
+          <div style={{ display: 'flex', flex: 1, minWidth: 0, gap: '4px', padding: '0 4px', overflowX: 'auto' }}>
+            <Key style={VIEW_CONTROL_STYLE} title={t('mobileCopySelection')} onClick={() => onAction?.('copy')}>{t('mobileCopySelection')}</Key>
+            <Key style={VIEW_CONTROL_STYLE} title={t('copyAll')} aria-label={t('copyAll')} onClick={() => onAction?.('copyAll')}><Copy size={14} /></Key>
+            <Key style={VIEW_CONTROL_STYLE} title={t('viewAsText')} aria-label={t('viewAsText')} onClick={() => onAction?.('viewAsText')}><FileText size={14} /></Key>
           </div>
-        ) : <>
+          <div style={{ flexShrink: 0, paddingRight: '4px' }}>
+            <Key style={VIEW_CONTROL_STYLE} title={t('scrollToBottom')} aria-label={t('scrollToBottom')}
+              onClick={() => onAction?.('scrollToBottom')}><ArrowDownToLine size={14} />{t('mobileBottom')}</Key>
+          </div>
+        </>) : <>
         {/* 고정 슬롯 — 대상 선택·히스토리처럼 **키가 아닌 것**이 여기 온다.
             빠른입력 버튼이 빠지면서 이 자리가 비었고, 입력 도크에 두면 도크가 두 줄이 된다.
             여기 올리면 도크는 한 줄로 끝나고 전체는 키바+입력 두 줄이 된다. */}

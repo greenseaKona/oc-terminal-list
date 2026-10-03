@@ -78,6 +78,23 @@ const setup = (over = {}) => {
 const api = (sessionId = 's1') => window.terminalSessions[sessionId];
 
 describe('useTerminalApi', () => {
+  it('returns to live tmux output without unlocking input or using the local-only scroll path', async () => {
+    const { refs, scrollToBottom, enqueue } = setup({ readOnly: true,
+      term: makeTerm([], { clearSelection: vi.fn() }) });
+    const restore = vi.fn(async () => true);
+    refs.finishViewingRef = { current: restore };
+    // The hook reads the optional ref on render.
+    const hook = renderHook(() => useTerminalApi({ refs, sessionId: 'view', isReady: true }));
+    expect(await api('view').scrollToBottom()).toBe(true);
+    expect(restore).toHaveBeenCalledOnce();
+    expect(scrollToBottom).not.toHaveBeenCalled();
+    expect(refs.readOnlyRef.current).toBe(true);
+    expect(api('view').sendData('x')).toBe(false);
+    expect(enqueue).not.toHaveBeenCalled();
+    restore.mockResolvedValue(false);
+    expect(await api('view').scrollToBottom()).toBe(false);
+    hook.unmount();
+  });
   it('blocks input, command history and focus in view mode while keeping output copy available', async () => {
     const { enqueue, socket, term } = setup({ readOnly: true, term: makeTerm(['visible output']) });
     expect(api().sendData('oops')).toBe(false);

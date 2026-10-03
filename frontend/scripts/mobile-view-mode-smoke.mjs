@@ -16,6 +16,7 @@ const bundle = await build({
     import setTerminalReadOnly from './src/components/terminal/setTerminalReadOnly';
     import MobileToolbar from './src/components/MobileToolbar';
     import useMobileViewMode from './src/hooks/useMobileViewMode';
+    import {copyToClipboard} from './src/utils/clipboard';
     function App() {
       const container = useRef(); const overlay = useRef(); const termRef = useRef();
       const [viewOnly, setViewOnly] = useMobileViewMode();
@@ -33,7 +34,7 @@ const bundle = await build({
         const interactions = attachTerminalInteractions({term,container:container.current,overlay:overlay.current,
           input:{push:data=>window.pointerInput.push(data)},getSocket:()=>({readyState:1}),
           isMobile:()=>true,isReadOnly:()=>locked.current,sessionId:'smoke',
-          logger:console,setContextMenu:()=>{},setCopyFlash:()=>{},setImagePasteState:()=>{}});
+          logger:console,setContextMenu:menu=>{window.selectionMenu=menu;},setCopyFlash:()=>{},setImagePasteState:()=>{}});
         term.write(Array.from({length:150},(_,i)=>'출력 내용 '+i+' — 보기 모드에서 안전하게 읽기\\r\\n').join(''));
         return () => { interactions.detach(); term.dispose(); };
       }, []);
@@ -46,7 +47,11 @@ const bundle = await build({
         </div>
         <MobileToolbar language="ko" viewOnly={viewOnly} onToggleViewOnly={()=>setViewOnly(!viewOnly)}
           onSendKey={data=>{if(!locked.current)termRef.current.input(data,true);}}
-          onAction={action=>{if(action==='viewAsText')setText('출력 내용: 읽기와 복사 가능');}} />
+          onAction={action=>{
+            if(action==='viewAsText')setText('출력 내용: 읽기와 복사 가능');
+            if(action==='scrollToBottom')termRef.current.scrollToBottom();
+            if(action==='copy')copyToClipboard(termRef.current.getSelection()).then(ok=>{window.copySucceeded=ok;});
+          }} />
         {text && <div role="dialog">{text}</div>}
       </main>;
     }
@@ -88,6 +93,67 @@ for (const engine of [chromium, webkit]) {
     });
     await page.waitForFunction(before => window.term.buffer.active.viewportY < before, before);
     assert.deepEqual(await page.evaluate(() => window.pointerInput), []);
+    await page.getByRole('button',{name:'맨 아래로 이동'}).tap();
+    await page.waitForFunction(() => window.term.buffer.active.viewportY === window.term.buffer.active.baseY);
+    assert.equal(await page.evaluate(() => window.term.options.disableStdin), true);
+    assert.equal(await page.getByRole('button',{name:'입력 모드로 전환'}).locator('svg').count(), 0);
+
+    const url = 'https://example.test/'+'a'.repeat(60)+'/wrapped-link';
+    await page.evaluate(url => new Promise(resolve => window.term.write('\r\nselect alpha beta\r\n한글 '+url+'\r\n',resolve)), url);
+    await page.evaluate(() => {
+      window.cellPoint = text => {
+        const term = window.term;
+        const rect = term.element.querySelector('.xterm-screen').getBoundingClientRect();
+        const cell = term._core._renderService.dimensions.css.cell;
+        for (let row = 0; row < term.rows; row++) {
+          const line = term.buffer.active.getLine(term.buffer.active.viewportY + row);
+          const index = line.translateToString(true).indexOf(text);
+          if (index < 0) continue;
+          let offset = 0;
+          for (let col = 0; col < term.cols; col++) {
+            const chars = line.getCell(col).getChars();
+            if (offset >= index && chars) return {x:rect.left+(col+0.5)*cell.width,y:rect.top+(row+0.5)*cell.height};
+            offset += chars.length;
+          }
+        }
+        throw Error('Missing visible text: '+text);
+      };
+      window.viewTouch = (type,p) => {
+        const event = new Event(type,{bubbles:true,cancelable:true});
+        Object.defineProperty(event,'touches',{value:type==='touchend'?[]:[{clientX:p.x,clientY:p.y}]});
+        document.getElementById('touch-surface').dispatchEvent(event);
+      };
+      // Exercise the real clipboard helper's fallback, including its DOM selection.
+      document.addEventListener('copy', () => {
+        const selected = document.querySelector('body > textarea[readonly]');
+        window.copiedText = selected?.value.slice(selected.selectionStart,selected.selectionEnd);
+      });
+    });
+    await page.evaluate(async () => {
+      const start = window.cellPoint('alpha');
+      const end = window.cellPoint('beta');
+      window.viewTouch('touchstart',start);
+      await new Promise(resolve => setTimeout(resolve,550));
+      window.viewTouch('touchmove',{...end,x:end.x+3*window.term._core._renderService.dimensions.css.cell.width});
+      window.viewTouch('touchend',end);
+    });
+    assert.equal(await page.evaluate(() => window.term.getSelection()), 'alpha beta');
+    assert.equal(await page.evaluate(() => window.selectionMenu.hasSelection), true);
+    await page.getByRole('button',{name:'선택 복사'}).tap();
+    await page.waitForFunction(() => window.copySucceeded === true);
+    assert.equal(await page.evaluate(() => window.copiedText), 'alpha beta');
+    assert.equal(await page.evaluate(() => document.activeElement === window.term.textarea), false);
+    await page.context().route('https://example.test/**', route => route.fulfill({body:'link destination'}));
+    const point = await page.evaluate(() => window.cellPoint('-link'));
+    const opened = page.waitForEvent('popup');
+    await page.touchscreen.tap(point.x,point.y);
+    const popup = await opened;
+    await popup.waitForLoadState();
+    assert.equal(popup.url(), url);
+    assert.equal(await popup.evaluate(() => window.opener), null);
+    await popup.close();
+    assert.deepEqual(await page.evaluate(() => window.pointerInput), []);
+    assert.deepEqual(await page.evaluate(() => window.input), []);
     await page.getByRole('button',{name:'텍스트로 보기'}).tap();
     assert.match(await page.getByRole('dialog').innerText(), /읽기와 복사/);
     await page.getByRole('button',{name:'입력 모드로 전환'}).tap();
@@ -107,9 +173,11 @@ for (const engine of [chromium, webkit]) {
       await page.setViewportSize({width,height:667});
       await page.evaluate(() => window.fitTerminal());
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'No horizontal overflow');
+      const bottom = await page.getByRole('button',{name:'맨 아래로 이동'}).boundingBox();
+      assert.ok(bottom.x >= 0 && bottom.x + bottom.width <= width, 'Bottom button stays visible');
     }
     await page.screenshot({path:'/tmp/terminal-mobile-view-'+engine.name()+'.png'});
     assert.deepEqual(errors, []);
-    console.log(engine.name()+': mobile view/input, scrolling, copy UI and persistence passed');
+    console.log(engine.name()+': view/input, selection/copy, wrapped links, bottom button and persistence passed');
   } finally { await browser.close(); }
 }

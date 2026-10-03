@@ -16,7 +16,7 @@ const useTerminalApi = ({ refs, forwardedRef, sessionId, paneId, tabId, isReady 
   const {
     xtermRef, wsRef, searchAddonRef, iosHangulRef, inputPreviewRef,
     enqueueInputRef, forceScrollToBottomRef, fitNowRef, webglRef,
-    lastDimsRef, evictedRef, endedRef, hasContentRef, readOnlyRef, prepareInputModeRef,
+    lastDimsRef, evictedRef, endedRef, hasContentRef, readOnlyRef, prepareInputModeRef, finishViewingRef,
   } = refs;
 
   // 입력 큐를 우선 태우고(순서 보존·백프레셔), 큐가 없으면 소켓으로 직접.
@@ -83,8 +83,13 @@ const useTerminalApi = ({ refs, forwardedRef, sessionId, paneId, tabId, isReady 
   const getSelection = useCallback(() => xtermRef.current?.getSelection() || '', [xtermRef]);
 
   const scrollToBottom = useCallback(() => {
+    if (readOnlyRef?.current) {
+      xtermRef.current?.clearSelection();
+      return finishViewingRef?.current?.() ?? false;
+    }
     forceScrollToBottomRef.current?.();
-  }, [forceScrollToBottomRef]);
+    return true;
+  }, [forceScrollToBottomRef, readOnlyRef, finishViewingRef, xtermRef]);
 
   /* 페이지/라인 단위 스크롤 — xterm 의 클라이언트 스크롤백만 만진다.
      PgUp/PgDn escape 를 PTY 로 보내면 셸/에디터가 해석 못 해 `^[[5~` 가 파일에 박힌다.

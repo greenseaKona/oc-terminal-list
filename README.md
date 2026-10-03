@@ -458,7 +458,9 @@ journalctl -u iterminallist.service -f
 
 Mobile terminals start in **View mode**. Tap **View** in the bottom toolbar to switch
 to **Input mode**. View mode prevents keyboard activation, terminal input, paste, and
-shortcut keys while keeping scrolling, Copy all, and **View as text** available.
+shortcut keys. Tap links to open them; hold and drag (or drag horizontally) to select
+text, then tap **Copy selection**. Swipe vertically to browse history and tap **Bottom**
+to return to live output without leaving View mode. Copy all and **View as text** remain available.
 The choice is remembered in this browser and does not affect desktop terminals.
 
 ### Updating

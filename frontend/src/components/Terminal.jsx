@@ -770,6 +770,9 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
         viewHistoryTouchedRef.current = true;
         readOnlyScrollRef.current?.(lines);
       },
+      onFileLinkClick: hostId ? null : (link) => {
+        window.dispatchEvent(new CustomEvent('iterm:open-file', { detail: { ...link, cwd } }));
+      },
       sessionId,
       hostId,
       logger,
@@ -1846,7 +1849,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
     refs: {
       xtermRef, wsRef, searchAddonRef, iosHangulRef, inputPreviewRef,
       enqueueInputRef, forceScrollToBottomRef, fitNowRef, webglRef,
-      lastDimsRef, evictedRef, endedRef, hasContentRef, readOnlyRef, prepareInputModeRef,
+      lastDimsRef, evictedRef, endedRef, hasContentRef, readOnlyRef, prepareInputModeRef, finishViewingRef,
     },
     forwardedRef: ref,
     sessionId,
@@ -2270,7 +2273,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
             userSelect: 'none',
             WebkitUserSelect: 'none',
             WebkitTouchCallout: 'none',
-            cursor: 'default',
+            cursor: readOnly ? 'text' : 'default',
           }}
           onContextMenu={(e) => {
             e.preventDefault();
@@ -2313,7 +2316,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
           }}
           onRefresh={onRefresh ? () => { setContextMenu(null); onRefresh(); } : null}
           onScrollToBottom={() => {
-            xtermRef.current?.scrollToBottom();
+            window.terminalSessions?.[sessionId]?.scrollToBottom?.();
             setContextMenu(null);
           }}
           readOnly={readOnly}

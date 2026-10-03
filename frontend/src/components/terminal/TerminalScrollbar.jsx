@@ -199,11 +199,12 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       if (!usesTmux()) { term.scrollToBottom(); return Promise.resolve(true); }
       // Serialize the return behind any seek already running on the server.
       clearTimeout(gestureTimer);
-      finish(false);
-      return new Promise((resolve) => {
-        finishRequest = { resolve, timer: setTimeout(() => finish(false), 6500) };
-        seek(0);
-      });
+      if (finishRequest) return finishRequest.promise;
+      let resolve;
+      const promise = new Promise((done) => { resolve = done; });
+      finishRequest = { resolve, promise, timer: setTimeout(() => finish(false), 6500) };
+      seek(0);
+      return promise;
     };
     const subscriptions = [term.onScroll(refresh), term.onWriteParsed(refresh), term.onResize(refresh),
       term.buffer.onBufferChange(refresh)];

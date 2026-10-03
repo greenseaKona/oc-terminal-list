@@ -12,6 +12,11 @@ describe('MobileToolbar quick input', () => {
     expect(screen.queryByTitle('Paste')).toBeNull();
     fireEvent.click(screen.getByTitle('View as text'));
     expect(onAction).toHaveBeenCalledWith('viewAsText');
+    fireEvent.click(screen.getByTitle('Copy selection'));
+    expect(onAction).toHaveBeenCalledWith('copy');
+    fireEvent.click(screen.getByTitle('Scroll to Bottom'));
+    expect(onAction).toHaveBeenCalledWith('scrollToBottom');
+    expect(screen.getByRole('button', { name: 'Switch to input mode' }).querySelector('svg')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Switch to input mode' }));
     expect(onToggle).toHaveBeenCalledOnce();
   });

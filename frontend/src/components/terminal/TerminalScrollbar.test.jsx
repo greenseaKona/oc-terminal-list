@@ -54,6 +54,7 @@ it('finishes an in-flight seek before returning to live output for input mode', 
   await waitFor(() => expect(resolveSeek).toBeTypeOf('function'));
   let finished;
   act(() => { finished = props.finishViewingRef.current(); });
+  expect(props.finishViewingRef.current()).toBe(finished);
   expect(fetch.mock.calls.filter(([, options]) => options.method === 'POST')).toHaveLength(1);
   await act(async () => { resolveSeek(); expect(await finished).toBe(true); });
   expect(fetch.mock.calls.filter(([, options]) => options.method === 'POST')
