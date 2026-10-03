@@ -5,14 +5,14 @@ from __future__ import annotations
 import asyncio
 import shlex
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from _deps import verify_auth_token
-from host_common import resolve_host_with_secrets, run_remote_cmd_pooled
+from host_common import force_shquote, resolve_host_with_secrets, run_remote_cmd_pooled
 from sqlite_storage import storage
-from tmux_manager import tmux_manager
 from terminal_prompt_context import prompt_context
+from tmux_manager import tmux_manager
 
 router = APIRouter(tags=["terminal"])
 FORMAT = "#{pane_id}|#{history_size}|#{scroll_position}|#{pane_height}|#{pane_mode}"
@@ -28,41 +28,53 @@ class ScrollRequest(BaseModel):
 def scroll_script(base: list[str], session: str, offset: int | None = None, include_input: bool = False) -> str:
     """Resolve the active pane once, then use that exact pane for every operation."""
     tmux = shlex.join(base)
-    target = shlex.quote(f"={session}:")
-    script = f'pane=$({tmux} display-message -p -t {target} "#{{pane_id}}") || exit 1\n'
+    target = force_shquote(f"={session}:")
+    script = f'state=$({tmux} display-message -p -t {target} {shlex.quote(FORMAT)}) || exit 1\n'
+    script += 'IFS="|" read -r pane hist position rows mode <<EOF\n$state\nEOF\n'
     script += 'case "$pane" in %*[!0-9]*|%|"") exit 1;; %*) ;; *) exit 1;; esac\n'
+    for name in ("hist", "rows"):
+        script += f'case "${name}" in ""|*[!0-9]*) exit 1;; esac\n'
+    script += 'case "$position" in "") position=0;; *[!0-9]*) exit 1;; esac\n'
     if offset is not None:
         # Never cancel another tmux mode (choose-tree, prompts, etc.). No raw keys
         # are sent: even if the shell is active, -X only addresses copy-mode.
-        script += f'mode=$({tmux} display-message -p -t "$pane" "#{{pane_mode}}")\n'
         script += 'case "$mode" in ""|copy-mode) ;; *) exit 1;; esac\n'
         if offset == 0:
-            script += f'[ "$mode" != copy-mode ] || {tmux} send-keys -t "$pane" -X cancel\n'
+            script += 'if [ "$mode" = copy-mode ]; then\n'
+            script += f'  state=$({tmux} send-keys -t "$pane" -X cancel \\; '
+            script += f'display-message -p -t "$pane" {shlex.quote(FORMAT)}) || exit 1\n'
+            script += 'fi\n'
         else:
             # Refresh the copy-mode snapshot for an explicit seek. New output
             # may have grown real history since the previous snapshot froze.
-            script += f'[ "$mode" != copy-mode ] || {tmux} send-keys -t "$pane" -X cancel\n'
-            script += f'history=$({tmux} display-message -p -t "$pane" "#{{history_size}}")\n'
-            script += 'case "$history" in ""|*[!0-9]*) exit 1;; esac\n'
-            script += f'count={int(offset)}; [ "$count" -le "$history" ] || count=$history\n'
-            script += f'{tmux} copy-mode -e -t "$pane" && '
-            script += f'{tmux} send-keys -t "$pane" -X history-bottom && '
-            script += f'{{ if [ "$count" -ge "$history" ]; then {tmux} send-keys -t "$pane" -X history-top; '
-            script += f'else {tmux} send-keys -t "$pane" -X -N "$count" scroll-up; fi; }} || exit 1\n'
-    script += f'state=$({tmux} display-message -p -t "$pane" {shlex.quote(FORMAT)}) || exit 1\n'
+            script += f'count={int(offset)}; [ "$count" -le "$hist" ] || count=$hist\n'
+            script += 'run_seek() {\n'
+            script += '  if [ "$mode" = copy-mode ]; then\n'
+            script += f'    {tmux} send-keys -t "$pane" -X cancel \\; "$@"\n'
+            script += '  else\n'
+            script += f'    {tmux} "$@"\n'
+            script += '  fi\n'
+            script += '}\n'
+            queue = 'copy-mode -e -t "$pane" \\; send-keys -t "$pane" -X history-bottom \\; '
+            final = f' \\; display-message -p -t "$pane" {shlex.quote(FORMAT)}'
+            script += 'if [ "$count" -ge "$hist" ]; then\n'
+            script += f'  state=$(run_seek {queue}send-keys -t "$pane" -X history-top{final}) || exit 1\n'
+            script += 'else\n'
+            script += f'  state=$(run_seek {queue}send-keys -t "$pane" -X -N "$count" scroll-up{final}) || exit 1\n'
+            script += 'fi\n'
     script += 'printf "%s\\n" "$state"'
     if include_input:
         # Read only while browsing history, and reuse the same owned pane.
         # Count logical rows through the viewport top, then capture a little
         # beyond it so a question crossing that edge is still complete. -J
         # preserves terminal wrapping, including wide Korean characters.
-        script += '\nIFS="|" read -r pane history position rows mode <<EOF\n$state\nEOF\n'
+        script += '\nIFS="|" read -r pane hist position rows mode <<EOF\n$state\nEOF\n'
         script += '[ "$mode" = copy-mode ] || exit 0\n'
-        for name in ("history", "position", "rows"):
+        for name in ("hist", "position", "rows"):
             script += f'case "${name}" in ""|*[!0-9]*) exit 0;; esac\n'
         script += '[ "$position" -gt 0 ] || exit 0\n'
         script += 'top=$((-position)); start=$((top-4000)); end=$((top+80))\n'
-        script += '[ "$start" -ge "$((-history))" ] || start=$((-history))\n'
+        script += '[ "$start" -ge "$((-hist))" ] || start=$((-hist))\n'
         script += '[ "$end" -lt "$rows" ] || end=$((rows-1))\n'
         capture = f'{tmux} capture-pane -p -J -t "$pane" -S "$start"'
         script += f'count=$({capture} -E "$top" | awk \'END {{print NR}}\')\n'
@@ -171,14 +183,17 @@ async def scroll_terminal(username: str, session: str, host_id: str | None, offs
 
 @router.get("/api/terminal-scroll")
 async def get_scroll(
+    response: Response,
     session_id: str = Query(min_length=1, max_length=256),
     host_id: str | None = None,
     include_input: bool = False,
     username: str = Depends(verify_auth_token),
 ):
+    response.headers["Cache-Control"] = "no-store"
     return await scroll_terminal(username, session_id, host_id, include_input=include_input)
 
 
 @router.post("/api/terminal-scroll")
-async def set_scroll(request: ScrollRequest, username: str = Depends(verify_auth_token)):
+async def set_scroll(request: ScrollRequest, response: Response, username: str = Depends(verify_auth_token)):
+    response.headers["Cache-Control"] = "no-store"
     return await scroll_terminal(username, request.session_id, request.host_id, request.offset, request.include_input)

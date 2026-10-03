@@ -7,18 +7,20 @@ import asyncio
 import base64
 import hashlib
 import hmac
-import types
 import logging
 import os
 import secrets
+import types
 import warnings
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import anyio
 import pyotp
 import jwt
 from jwt import PyJWTError as JWTError
 
+from auth_tokens import AuthTokenMixin
 from vault import decrypt_str, encrypt_str, enforce_secret_file_permissions
 
 logger = logging.getLogger(__name__)
@@ -135,12 +137,16 @@ def _teach_passlib_the_bcrypt_version() -> None:
     except Exception:
         pass   # 못 알려줘도 검증은 된다. 로그가 조금 시끄러울 뿐이다.
 
-class AuthManager:
+class AuthManager(AuthTokenMixin):
     """Manages authentication operations"""
+
+    token_expire_hours = ACCESS_TOKEN_EXPIRE_HOURS
+    token_algorithm = ALGORITHM
 
     def __init__(self, storage):
         self.storage = storage
         self.secret_key = None
+        self._auth_session_lock = anyio.Lock()
         # SECRET_KEY를 동기적으로 초기화 (비동기 컨텍스트에서 호출됨)
         asyncio.create_task(self._init_secret_key())
 
@@ -222,7 +228,10 @@ class AuthManager:
         # 항상 해시 검증을 수행 (불일치여도 동일 비용).
         password_ok = self.verify_password(password, stored_hash)
         username_ok = hmac.compare_digest(stored_username, username)
-        return bool(admin_data) and username_ok and password_ok
+        verified = bool(admin_data) and username_ok and password_ok
+        from auth_sessions import verified_credentials
+        verified_credentials.set((username, admin_data["auth_version"]) if verified else None)
+        return verified
 
     async def change_password(
         self, username: str, current_password: str, new_password: str
@@ -231,42 +240,13 @@ class AuthManager:
         if not await self.verify_admin(username, current_password):
             return False
         hashed = self.hash_password(new_password)
-        return await self.storage.update_admin_password(username, hashed)
+        async with self._auth_session_lock:
+            changed = await self.storage.update_admin_password(username, hashed)
+            if changed:
+                from auth_sessions import revoke_connections
+                await revoke_connections(username)
+        return changed
 
-    async def create_access_token(self, username: str) -> str:
-        """Create JWT access token"""
-        secret_key = await self.ensure_secret_key()
-        expire = datetime.utcnow() + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS)
-        to_encode = {
-            "sub": username,
-            "exp": expire,
-            "iat": datetime.utcnow(),
-        }
-        encoded_jwt = jwt.encode(to_encode, secret_key, algorithm=ALGORITHM)
-        return encoded_jwt
-
-    async def verify_token(self, token: str) -> str | None:
-        """Verify JWT token and return username (단, otp_pending / scoped 토큰은 거부)."""
-        try:
-            secret_key = await self.ensure_secret_key()
-            payload = jwt.decode(token, secret_key, algorithms=[ALGORITHM])
-            if payload.get("otp_pending"):
-                # 2FA 가 끝나지 않은 토큰으로는 일반 API 접근 불가
-                return None
-            if payload.get("scope"):
-                # 용도 제한 토큰은 일반 API 에 쓸 수 없다.
-                #
-                # ⚠️ 이제 이 앱은 scope 토큰을 **발급하지 않는다**(itl 층과 함께 없앴다).
-                # 그래도 이 거부는 남긴다: 원격 tmux 환경변수에 앉아 있던 옛 `ITL_TOKEN`
-                # 이 아직 만료 전(30일)일 수 있고, 이 한 줄이 없으면 그것이 **전체 권한**
-                # 이 된다. 지우는 것보다 남기는 쪽이 싸다.
-                return None
-            username: str = payload.get("sub")
-            if username is None:
-                return None
-            return username
-        except JWTError:
-            return None
 
     # ------------------------------ OTP ------------------------------
 
@@ -372,8 +352,13 @@ class AuthManager:
         """1차 (비밀번호) 통과 후 2차 (OTP) 대기용 단명 토큰."""
         secret_key = await self.ensure_secret_key()
         expire = datetime.utcnow() + timedelta(minutes=OTP_PENDING_TOKEN_EXPIRE_MINUTES)
+        from auth_sessions import verified_credentials
+        credentials = verified_credentials.get()
+        admin = await self.storage.get_admin()
+        version = credentials[1] if credentials and credentials[0] == username else admin["auth_version"]
         to_encode = {
             "sub": username,
+            "auth_version": version,
             "exp": expire,
             "iat": datetime.utcnow(),
             "otp_pending": True,
@@ -387,6 +372,12 @@ class AuthManager:
             payload = jwt.decode(token, secret_key, algorithms=[ALGORITHM])
             if not payload.get("otp_pending"):
                 return None
+            admin = await self.storage.get_admin()
+            if (not admin or admin["username"] != payload.get("sub")
+                    or admin["auth_version"] != payload.get("auth_version")):
+                return None
+            from auth_sessions import verified_credentials
+            verified_credentials.set((admin["username"], admin["auth_version"]))
             return payload.get("sub")
         except JWTError:
             return None

@@ -233,7 +233,12 @@ class SentinelScanner:
                 logger.warning("itl sentinel rate-limited (>%d/%ss)",
                                RATE_MAX_SENDS, RATE_WINDOW_SEC)
                 continue
-            out.append({"to": msg["to"], "text": msg["text"], "n": msg.get("n")})
+            delivery = {"to": msg["to"], "text": msg["text"], "n": msg.get("n")}
+            if msg.get("submit") is False:
+                delivery["submit"] = False
+            if msg.get("receipt") is True:
+                delivery["receipt"] = True
+            out.append(delivery)
         return out
 
 
@@ -269,10 +274,15 @@ def parse_sentinel(payload: str) -> dict | None:
     nonce = data.get("n")
     # Shape only. Whether that tab exists is re-counted right before delivery
     # (numbers shift when panes close).
-    return {
+    result = {
         "to": to,
         "text": text,
         "key": key if isinstance(key, str) else None,
         # 같은 것을 두 통로로 받을 수 있어(표식 + 우편함) 라우터가 이걸로 접는다.
         "n": nonce if isinstance(nonce, str) else None,
     }
+    if data.get("submit") is False:
+        result["submit"] = False
+    if data.get("receipt") is True:
+        result["receipt"] = True
+    return result

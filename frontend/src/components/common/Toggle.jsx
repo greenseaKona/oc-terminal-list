@@ -69,6 +69,10 @@ const styles = {
     font: 'inherit',
     textAlign: 'left',
     cursor: 'pointer',
+    // iOS ignores `user-scalable=no` and keeps double-tap zoom: two quick taps
+    // on this row zoom-bounce (the toggle flips twice and looks stuck).
+    // `manipulation` keeps panning but disables the double-tap zoom.
+    touchAction: 'manipulation',
     WebkitTapHighlightColor: 'transparent',
   },
   textCol: {

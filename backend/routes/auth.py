@@ -140,10 +140,17 @@ async def verify_token(
 ):
     # Smooth migration: an old localStorage Bearer token that still verifies is
     # promoted to the new HttpOnly cookie, then the frontend can delete it.
-    if authorization and authorization.startswith("Bearer ") and not auth_cookie:
+    if authorization and authorization.startswith("Bearer "):
         bearer = authorization[len("Bearer "):].strip()
-        if bearer and bearer.lower() not in {"null", "undefined"}:
-            _set_auth_cookie(response, request, bearer)
+        if bearer and bearer.lower() not in {"null", "undefined"} and bearer != auth_cookie:
+            from auth_sessions import current_session
+            authenticated_session = current_session.get()
+            try:
+                bearer_username = await get_auth_manager().verify_token(bearer)
+            finally:
+                current_session.set(authenticated_session)
+            if bearer_username == username:
+                _set_auth_cookie(response, request, bearer)
     return {"valid": True, "username": username}
 
 
@@ -158,13 +165,25 @@ async def refresh_token(
     (만료된 토큰은 Depends 에서 401 → 프론트가 로그인 유도)"""
     if get_auth_manager() is None:
         raise HTTPException(status_code=500, detail="인증 시스템이 초기화되지 않았습니다")
-    access_token = await get_auth_manager().create_access_token(username)
+    access_token = await get_auth_manager().refresh_access_token(username)
     _set_auth_cookie(response, request, access_token)
     return {"access_token": access_token, "token_type": "bearer", "username": username}
 
 
 @router.post("/api/auth/logout")
-async def logout(response: Response):
+async def logout(
+    response: Response,
+    authorization: str | None = Header(None),
+    auth_cookie: str | None = Cookie(None, alias=AUTH_COOKIE_NAME),
+):
+    if (authorization or auth_cookie) and get_auth_manager() is not None:
+        try:
+            await verify_auth_token(authorization, auth_cookie)
+        except HTTPException as exc:
+            if exc.status_code != 401:
+                raise
+        else:
+            await get_auth_manager().logout_session()
     _clear_auth_cookie(response)
     return {"success": True}
 

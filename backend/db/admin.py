@@ -5,10 +5,23 @@ SQLiteStorage 에 믹스인으로 합류한다 — 호출부는 그대로 `stora
 """
 from __future__ import annotations
 
-from datetime import datetime
 import asyncio
 import sqlite3
+import time
+from datetime import datetime
+from typing import TypedDict
 
+import anyio
+
+
+class AdminRecord(TypedDict):
+    username: str
+    password: str
+    created_at: str
+    otp_secret_enc: str | None
+    otp_enabled: bool
+    otp_enabled_at: str | None
+    auth_version: int
 
 
 class AdminMixin:
@@ -38,12 +51,13 @@ class AdminMixin:
                 self._release_connection(conn)
         return await asyncio.to_thread(_create)
 
-    async def get_admin(self) -> dict[str, str] | None:
-        def _get():
+    async def get_admin(self) -> AdminRecord | None:
+        def _get() -> AdminRecord | None:
             conn = self._get_connection()
             try:
                 row = conn.execute(
-                    "SELECT username, password, created_at, otp_secret_enc, otp_enabled, otp_enabled_at FROM admin LIMIT 1"
+                    "SELECT username, password, created_at, otp_secret_enc, otp_enabled, otp_enabled_at, "
+                    "auth_version FROM admin LIMIT 1"
                 ).fetchone()
                 if not row:
                     return None
@@ -54,6 +68,7 @@ class AdminMixin:
                     "otp_secret_enc": row["otp_secret_enc"],
                     "otp_enabled": bool(row["otp_enabled"]),
                     "otp_enabled_at": row["otp_enabled_at"],
+                    "auth_version": row["auth_version"],
                 }
             finally:
                 self._release_connection(conn)
@@ -64,14 +79,76 @@ class AdminMixin:
             conn = self._get_connection()
             try:
                 cur = conn.execute(
-                    "UPDATE admin SET password = ? WHERE username = ?",
+                    "UPDATE admin SET password = ?, auth_version = auth_version + 1 WHERE username = ?",
                     (password_hash, username),
                 )
+                conn.execute("DELETE FROM auth_sessions WHERE username = ?", (username,))
                 conn.commit()
                 return cur.rowcount > 0
             finally:
                 self._release_connection(conn)
         return await asyncio.to_thread(_update)
+
+    async def create_auth_session(
+        self, session_id: str, username: str, expires_at: float, version: int
+    ) -> bool:
+        """Create a login session with the current credential generation."""
+        def _create() -> bool:
+            conn = self._get_connection()
+            try:
+                conn.execute("DELETE FROM auth_sessions WHERE expires_at <= ?", (time.time(),))
+                result = conn.execute(
+                    "INSERT INTO auth_sessions SELECT ?, username, auth_version, ? FROM admin "
+                    "WHERE username = ? AND auth_version = ?",
+                    (session_id, expires_at, username, version),
+                )
+                conn.commit()
+                return result.rowcount == 1
+            finally:
+                self._release_connection(conn)
+        return await anyio.to_thread.run_sync(_create)
+
+    async def auth_session_expiry(self, session_id: str, username: str) -> float | None:
+        """Check generation, ownership and expiry together on every authenticated request."""
+        def _read() -> float | None:
+            conn = self._get_connection()
+            try:
+                row = conn.execute(
+                    "SELECT s.expires_at FROM auth_sessions s JOIN admin a ON a.username = s.username "
+                    "WHERE s.session_id = ? AND s.username = ? AND s.auth_version = a.auth_version "
+                    "AND s.expires_at > ?", (session_id, username, time.time()),
+                ).fetchone()
+                return float(row[0]) if row else None
+            finally:
+                self._release_connection(conn)
+        return await anyio.to_thread.run_sync(_read)
+
+    async def refresh_auth_session(self, session_id: str, expires_at: float) -> bool:
+        """Extend an existing valid session without recreating a revoked one."""
+        def _refresh() -> bool:
+            conn = self._get_connection()
+            try:
+                result = conn.execute(
+                    "UPDATE auth_sessions SET expires_at = ? WHERE session_id = ? AND expires_at > ? "
+                    "AND auth_version = (SELECT auth_version FROM admin WHERE username = auth_sessions.username)",
+                    (expires_at, session_id, time.time()),
+                )
+                conn.commit()
+                return result.rowcount == 1
+            finally:
+                self._release_connection(conn)
+        return await anyio.to_thread.run_sync(_refresh)
+
+    async def revoke_auth_session(self, session_id: str) -> None:
+        """Persist logout so every token in this refresh family stays invalid after restart."""
+        def _revoke() -> None:
+            conn = self._get_connection()
+            try:
+                conn.execute("DELETE FROM auth_sessions WHERE session_id = ?", (session_id,))
+                conn.commit()
+            finally:
+                self._release_connection(conn)
+        await anyio.to_thread.run_sync(_revoke)
 
     async def set_admin_otp(self, username: str, secret_enc: str | None, enabled: bool) -> None:
         def _set():

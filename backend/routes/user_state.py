@@ -204,9 +204,16 @@ async def get_tab_state(username: str = Depends(verify_auth_token)):
     next_tab_address_number = _next_tab_address_number(tabs, state.get("nextTabAddressNumber"))
     sanitized_tabs, sanitized_active_tab_id = await _sanitize_tab_state(tabs, active_tab_id, username)
     if sanitized_tabs != tabs or sanitized_active_tab_id != active_tab_id:
-        updated_at = await storage.save_tab_state(
+        result = await storage.save_tab_state_checked(
             username, sanitized_tabs, sanitized_active_tab_id, next_tab_address_number,
+            if_match=updated_at,
         )
+        if result.status == "conflict":
+            return result.state
+        updated_at = result.state["updatedAt"]
+        next_tab_address_number = result.state["nextTabAddressNumber"]
+        if result.status == "saved":
+            _notify_tab_state_change(username, updated_at)
     return {
         "tabs": sanitized_tabs,
         "activeTabId": sanitized_active_tab_id,
@@ -255,23 +262,42 @@ async def tab_state_events(
         # 쿠키 폴백 — 무효면 verify_auth_token 이 401 을 던진다.
         username = await verify_auth_token(None, auth_cookie)
 
+    from auth_sessions import current_session
+    session = current_session.get()
     queue: asyncio.Queue = asyncio.Queue(maxsize=10)
+
+    def stop_stream() -> None:
+        if queue.full():
+            queue.get_nowait()
+        queue.put_nowait(None)
 
     if username not in _tab_state_sse_queues:
         _tab_state_sse_queues[username] = []
     _tab_state_sse_queues[username].append(queue)
 
     async def event_stream():
+        if session is not None:
+            session.stream_stoppers.add(stop_stream)
         try:
+            if session is not None and not session.active:
+                return
             current = await storage.get_tab_state_updated_at(username)
+            if session is not None and not session.active:
+                return
             yield f"data: {json.dumps({'updatedAt': current})}\n\n"
             while True:
+                if session is not None and not session.active:
+                    return
                 try:
                     payload = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    if payload is None or (session is not None and not session.active):
+                        return
                     yield f"data: {json.dumps(payload)}\n\n"
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
         finally:
+            if session is not None:
+                session.stream_stoppers.discard(stop_stream)
             queues = _tab_state_sse_queues.get(username, [])
             if queue in queues:
                 queues.remove(queue)
@@ -296,39 +322,27 @@ async def put_tab_state(
     """
     if not isinstance(request.tabs, list):
         raise HTTPException(status_code=400, detail="tabs must be an array")
-    if request.ifMatch:
-        current_updated_at = await storage.get_tab_state_updated_at(username)
-        if current_updated_at and request.ifMatch != current_updated_at:
-            current_state = await storage.get_tab_state(username) or {"tabs": [], "activeTabId": None, "updatedAt": current_updated_at}
-            return JSONResponse(
-                status_code=409,
-                content={"detail": "tab-state version mismatch", "current": current_state},
-            )
     tabs, active_tab_id = await _sanitize_tab_state(request.tabs, request.activeTabId, username)
 
-    # 내용이 그대로면 새 버전을 찍지 않는다 (no-op write 차단).
-    # save_tab_state 는 내용과 무관하게 updated_at 을 새로 찍고, 그 값이 SSE 로 다른 기기에
-    # 전파된다. 받은 기기는 상태를 적용하고 그 적용이 다시 자기 PUT 을 부르므로, 기기 두 대만
-    # 켜져 있어도 같은 내용이 1초 주기로 무한히 오간다. 여기서 끊는 게 근본이다.
-    existing = await storage.get_tab_state(username)
-    next_tab_address_number = _next_tab_address_number(
-        tabs,
-        request.nextTabAddressNumber,
-        existing.get("nextTabAddressNumber") if existing else None,
+    # No-op detection, version checks and the address high-water mark share one transaction.
+    result = await storage.save_tab_state_checked(
+        username, tabs, active_tab_id, _next_tab_address_number(tabs, request.nextTabAddressNumber),
+        if_match=request.ifMatch,
     )
-    if (
-        existing
-        and existing.get("tabs") == tabs
-        and existing.get("activeTabId") == active_tab_id
-        and existing.get("nextTabAddressNumber", 1) == next_tab_address_number
-    ):
+    next_tab_address_number = result.state["nextTabAddressNumber"]
+    updated_at = result.state["updatedAt"]
+    if result.status == "unchanged":
         return {
             "status": "unchanged",
             "nextTabAddressNumber": next_tab_address_number,
-            "updatedAt": existing.get("updatedAt"),
+            "updatedAt": updated_at,
         }
 
-    updated_at = await storage.save_tab_state(username, tabs, active_tab_id, next_tab_address_number)
+    if result.status == "conflict":
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "tab-state version mismatch", "current": result.state},
+        )
     _notify_tab_state_change(username, updated_at)
     # pane 번호가 바뀔 수 있는 **모든** 순간이 여기다(추가·닫기·순서변경 전부 탭 상태를 바꾼다).
     # 각 세션의 하단 상태바가 자기 주소를 그리도록 새겨 준다 — 자기 주소를 자기가

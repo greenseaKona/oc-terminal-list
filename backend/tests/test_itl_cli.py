@@ -190,6 +190,62 @@ class TestWhoami:
         assert itl.whoami(self.PANES) is None
 
 
+class TestTmuxAccessFailure:
+    def test_discovery_reports_denied_socket(self, monkeypatch):
+        monkeypatch.setattr(itl, "tmux_bin", lambda: "/usr/bin/tmux")
+        monkeypatch.setattr(itl, "tmux_sockets", lambda: ["/tmp/tmux-1000/app"])
+        monkeypatch.setattr(itl, "run", lambda argv, **kw: (1, "", "error connecting (Operation not permitted)"))
+
+        with pytest.raises(itl.TmuxAccessError, match="Operation not permitted"):
+            itl.discover_tmux()
+
+    @pytest.mark.parametrize("argv", [["list"], ["whoami"], ["send", "1.3", "hi"]])
+    def test_all_commands_report_denied_socket(self, monkeypatch, capsys, argv):
+        def denied():
+            raise itl.TmuxAccessError("tmux 소켓 접근 거부: Operation not permitted")
+
+        monkeypatch.setattr(itl, "discover", denied)
+        assert itl.main(argv) == 3
+        captured = capsys.readouterr()
+        assert "Operation not permitted" in captured.err
+        assert "itl sandbox-config" in captured.err
+        assert "열쇠가 없다" not in captured.err
+        assert itl.SEND_MARKER not in captured.out
+
+    def test_send_reports_denied_key_lookup_in_json(self, monkeypatch, capsys):
+        def denied_key():
+            raise itl.TmuxAccessError("tmux 소켓 접근 거부: Operation not permitted")
+
+        monkeypatch.setattr(itl, "discover", lambda: [])
+        monkeypatch.setattr(itl, "my_key", denied_key)
+
+        assert itl.main(["--json", "send", "1.3", "hi"]) == 3
+        result = json.loads(capsys.readouterr().out)
+        assert result["ok"] is False and result["handedOff"] is False
+        assert result["errorCode"] == "tmux_socket_denied" and result["retryable"] is False
+        assert "Operation not permitted" in result["error"]
+
+    def test_sandbox_config_uses_current_tmux_socket_without_connecting(self, monkeypatch, capsys):
+        import tomllib
+
+        monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,123,0")
+        monkeypatch.setattr(itl, "discover", lambda: pytest.fail("sandbox-config must not connect to tmux"))
+
+        assert itl.main(["--json", "sandbox-config"]) == 0
+        result = json.loads(capsys.readouterr().out)
+        assert result["socket"] == "/tmp/tmux-1000/default"
+        assert '"/tmp/tmux-1000/default" = "allow"' in result["config"]
+        assert '"/tmp/tmux-1000" = "read"' in result["config"]
+        config = tomllib.loads(result["config"])
+        assert config["permissions"]["itl-tmux"]["network"]["unix_sockets"][result["socket"]] == "allow"
+        assert "sandbox_mode" in result["instructions"]
+
+    def test_sandbox_config_requires_tmux_environment(self, monkeypatch, capsys):
+        monkeypatch.delenv("TMUX", raising=False)
+        assert itl.main(["sandbox-config"]) == 2
+        assert "TMUX" in capsys.readouterr().err
+
+
 class TestSendGuards:
     def test_너무_길면_보내지_않는다(self):
         pane = itl.pane_record("tmux", "/s", "a", "%0")
@@ -204,7 +260,7 @@ def test_stdlib_만_쓴다():
     import ast
     tree = ast.parse(ITL_PATH.read_text(encoding="utf-8"))
     allowed = {
-        "argparse", "json", "os", "re", "secrets", "shutil", "subprocess", "sys", "__future__",
+        "argparse", "json", "os", "re", "secrets", "shlex", "shutil", "subprocess", "sys", "__future__",
     }
     imported = set()
     for node in ast.walk(tree):
@@ -245,6 +301,16 @@ class TestKey:
         monkeypatch.delenv("TMUX_PANE", raising=False)
         assert itl.my_key() == ""
 
+    def test_denied_key_lookup_does_not_mean_missing_key(self, monkeypatch):
+        monkeypatch.delenv(itl.KEY_ENV, raising=False)
+        monkeypatch.setenv("TMUX", "/tmp/tmux-1000/app,1,0")
+        monkeypatch.setenv("TMUX_PANE", "%5")
+        monkeypatch.setattr(itl, "tmux_bin", lambda: "/usr/bin/tmux")
+        monkeypatch.setattr(itl, "run", lambda argv, **kw: (1, "", "error connecting (Operation not permitted)"))
+
+        with pytest.raises(itl.TmuxAccessError, match="Operation not permitted"):
+            itl.my_key()
+
     def test_열쇠_없이는_표식을_찍지_않는다(self, monkeypatch, capsys):
         """A marker without the key is dropped by the bridge — say so instead of printing it."""
         monkeypatch.setattr(itl, "my_key", lambda: "")
@@ -252,6 +318,9 @@ class TestKey:
         monkeypatch.setattr(itl, "put_outbox", lambda line: outbox.append(line) or True)
         ok, why = itl.send_app_addr("1.2", "hi")
         assert not ok and "열쇠" in why
+        assert "1.2" in why and "로컬" in why
+        assert "itl list" in why and "itl whoami" in why
+        assert "재시도" in why
         assert itl.SEND_MARKER not in capsys.readouterr().out
         assert outbox == []                 # 열쇠가 없으면 우편함도 안 세운다
 

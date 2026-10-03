@@ -33,6 +33,16 @@ class SchemaMixin:
             cursor.execute("ALTER TABLE admin ADD COLUMN otp_enabled INTEGER NOT NULL DEFAULT 0")
         if "otp_enabled_at" not in admin_cols:
             cursor.execute("ALTER TABLE admin ADD COLUMN otp_enabled_at TEXT")
+        if "auth_version" not in admin_cols:
+            cursor.execute("ALTER TABLE admin ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0")
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                session_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                auth_version INTEGER NOT NULL,
+                expires_at REAL NOT NULL
+            )
+        """)
 
         # 일회용 백업 코드 (bcrypt 해시로만 저장 — 평문은 발급 시점에만 노출)
         cursor.execute("""

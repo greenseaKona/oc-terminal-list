@@ -1,8 +1,18 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import GlassModal from './GlassModal';
 
 describe('GlassModal keyboard behavior', () => {
+  it('is not globally forced fullscreen on mobile', () => {
+    // jsdom does not evaluate media queries, so guard the app-shell rule that can
+    // override every caller's inline dialog size only when it uses !important.
+    const appSource = readFileSync(resolve(process.cwd(), 'src/App.jsx'), 'utf8');
+    expect(appSource).not.toContain('.iterm-glass-overlay { padding: 0 !important; }');
+    expect(appSource).not.toMatch(/\.iterm-glass-modal\s*\{[^}]*height:\s*100%\s*!important/s);
+  });
+
   it('marks the dialog modal, focuses its first action, and closes with Escape', () => {
     const onClose = vi.fn();
     render(

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 
 import { homeTilde, stripHostPathPrefix } from './cwdPath';
 import { readPanelState, DEFAULT_PANEL_WIDTH, MIN_PANEL_WIDTH, MAX_PANEL_WIDTH } from './panelState';
@@ -88,6 +88,23 @@ describe('렌더 스모크 — import 끊김 감지', () => {
       loading={false} disabled={false} ui={ui} t={(k) => k}
     />);
     expect(screen.getByText(/project/)).toBeTruthy();
+  });
+
+  it('잘린 cwd를 마우스와 키보드로 가리키면 전체 절대경로를 보여준다', () => {
+    render(<CwdBreadcrumb
+      paneInfo={{ tabType: 'local', cwd: '/home/ubuntu/app/project/very/deep/path' }}
+      loading={false} disabled={false} ui={ui} t={(k) => k}
+    />);
+    const path = screen.getByText('~/app/project/very/deep/path');
+
+    fireEvent.pointerEnter(path);
+    expect(screen.getByRole('tooltip')).toHaveTextContent('/home/ubuntu/app/project/very/deep/path');
+    expect(path).toHaveAttribute('aria-describedby', screen.getByRole('tooltip').id);
+
+    fireEvent.pointerLeave(path);
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    fireEvent.focus(path);
+    expect(screen.getByRole('tooltip')).toHaveTextContent('/home/ubuntu/app/project/very/deep/path');
   });
 
   it('CwdBreadcrumb 가 로딩 중에도 터지지 않는다', () => {

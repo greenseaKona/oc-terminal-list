@@ -6,13 +6,16 @@ import { tokens } from '../../styles/tokens';
 
 const { fontSize, fontWeight, lineHeight, radius, space } = tokens;
 
-// spin keyframes — 모듈 로드 시 한 번만 주입
 (() => {
   if (typeof document === 'undefined') return;
-  if (document.getElementById('tl-spin-kf')) return;
+  if (document.getElementById('tl-keyframes')) return;
   const s = document.createElement('style');
-  s.id = 'tl-spin-kf';
-  s.textContent = '@keyframes tl-spin{to{transform:rotate(360deg)}}';
+  s.id = 'tl-keyframes';
+  s.textContent = [
+    '@keyframes tl-spin{to{transform:rotate(360deg)}}',
+    '@keyframes tl-preview-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}',
+    '@media (prefers-reduced-motion:reduce){.tl-input-preview{animation:none!important}.tl-scrollbar-thumb{transition:none!important}}',
+  ].join('');
   document.head.appendChild(s);
 })();
 

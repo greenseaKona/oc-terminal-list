@@ -10,9 +10,9 @@ import useSmartScroll from '../hooks/useSmartScroll';
 import useTranslation from '../hooks/useTranslation';
 import { normalizeTerminalFontFamily } from '../utils/terminalFonts';
 import { isTerminalAutoResponse } from '../utils/terminalInput';
-import { pushLocalCommand as pushLocalCommandHistory } from '../utils/commandHistory';
 import { getNetworkSummary, getTerminalClientId } from '../utils/clientIdentity';
 import { acquireWsConnectSlot } from '../utils/wsConnectGate';
+import { TMUX, NONE, normalize as normalizeMultiplexer } from '../utils/multiplexer';
 import {
   _textDecoder, _textEncoder,
   RECOVERY_GRACE_MS, RECOVERY_POLL_MS, TAKEOVER_CONFIRM_MS, TAKEOVER_CONFIRM_POLL_MS,
@@ -28,7 +28,7 @@ import {
   OUTAGE_PROBE_MIN_DELAY_MS, SESSION_GONE_LOOP_GUARD_MS, RESTART_GRACE_MS,
 } from './terminal/terminalConstants';
 import {
-  sleep, looksLikeRecoverableBulkInput,
+  sleep,
   uploadFileAndGetPath, copyTextToClipboard, issueWsTicket,
 } from './terminal/terminalHelpers';
 import { TerminalEdgeGutter, AuthPromptOverlay, TerminalContextMenu } from './terminal/TerminalOverlays';
@@ -36,6 +36,7 @@ import { CopiedToast, FileDropOverlay, ImagePasteToast, ReconnectPill, TerminalS
 import { ConnectionTroubleCard, ShellClosingCard, ShellEndedCard, TakeoverCard } from './terminal/TerminalStatusCards';
 import attachTerminalFileDrop from './terminal/attachTerminalFileDrop';
 import attachIosHangulInput from './terminal/attachIosHangulInput';
+import attachImeTextareaGuard from './terminal/attachImeTextareaGuard';
 import { probeSpacingMs, claimProbeLease, releaseProbeLease } from './terminal/outageProbe';
 import attachTerminalInteractions from './terminal/attachTerminalInteractions';
 import createInputQueue, { isLatencySensitiveInput, WS_BUFFER_HIGH_WATER } from './terminal/createInputQueue';
@@ -47,6 +48,7 @@ import { buildWsUrl, fetchSessionClients, wsPathFor } from './terminal/sessionEn
 import { recordDisconnect, recordReconnect } from './terminal/reconnectDiag';
 import ensureXtermGlobalStyles from './terminal/xtermGlobalCss';
 import useTerminalApi from './terminal/useTerminalApi';
+import setTerminalReadOnly from './terminal/setTerminalReadOnly';
 import TerminalTexture from './TerminalTexture';
 import TerminalScrollbar from './terminal/TerminalScrollbar';
 
@@ -85,6 +87,22 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
   const terminalRef = useRef(null);
   const touchOverlayRef = useRef(null);
   const xtermRef = useRef(null);
+  const readOnly = isMobile && settings.mobileViewOnly === true;
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
+  const readOnlyScrollRef = useRef(null);
+  const finishViewingRef = useRef(null);
+  const viewHistoryTouchedRef = useRef(false);
+  const markViewHistory = useCallback(() => {
+    if (readOnlyRef.current) viewHistoryTouchedRef.current = true;
+  }, []);
+  const prepareInputModeRef = useRef(null);
+  prepareInputModeRef.current = async () => {
+    if (!viewHistoryTouchedRef.current) return true;
+    const restored = await (finishViewingRef.current?.() ?? false);
+    if (restored) viewHistoryTouchedRef.current = false;
+    return restored;
+  };
   const inputPreviewRef = useRef(null);
   const iosHangulRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -551,6 +569,8 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
   /* 고른 멀티플렉서가 이 호스트에 없다 — 값은 **없는 도구의 이름**이다(null = 문제없음).
      불리언이면 무엇을 깔아야 하는지 못 쓴다. */
   const [muxMissing, setMuxMissing] = useState(null);
+  const [activeMultiplexer, setActiveMultiplexer] = useState(null);
+  const selectedMultiplexer = normalizeMultiplexer(paneMultiplexer, settings.defaultMultiplexer);
   const [copyFlash, setCopyFlash] = useState(false);
   const [edgeGutter, setEdgeGutter] = useState({ right: 0, bottom: 0 });
   const edgeGutterRef = useRef(edgeGutter);
@@ -693,6 +713,8 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
       term,
       isActive: () => isActiveRef.current,
       isFocused: () => isFocusedRef.current,
+      isVisible: () => !document.hidden,
+      isMobile: () => isMobileRef.current,
       // ref 로 읽는다 — 이북 모드를 켜고 끄는 데 소켓을 다시 열 이유는 없다.
       isEink: () => isEinkRef.current,
       onServerOutput: () => predictiveEchoRef.current?.onServerOutput(),
@@ -709,7 +731,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
 
     /* 입력 큐 — 청크 분할·백프레셔. 소켓이 닫혀 있어도 버리지 않고 쌓아뒀다 재연결 후 보낸다. */
     const input = createInputQueue({
-      getSocket: () => wsRef.current,
+      getSocket: () => readOnlyRef.current ? null : wsRef.current,
       getLastRecvAt: () => lastRecvRef.current,
       onProbeLiveness: () => probeLivenessRef.current?.(),
       onBroadcast: (data) => onBroadcastRef.current?.(data),
@@ -720,6 +742,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
 
     const iosHangul = attachIosHangulInput(term);
     iosHangulRef.current = iosHangul;
+    const imeTextareaGuard = iosHangul.active ? null : attachImeTextareaGuard(term);
 
 
     /* WebGL 렌더러 — DOM 렌더러보다 입력→화면 반영이 빠르고 CPU 도 덜 먹는다.
@@ -728,7 +751,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
     const explicitWebgl = settings?.useWebgl;
     webglRef.current = createWebglController({
       term,
-      enabled: explicitWebgl === undefined ? !isMobileRef.current : explicitWebgl !== false,
+      enabled: !isMobileRef.current && explicitWebgl !== false,
       isActive: () => isActiveRef.current,
       debug: localStorage.getItem('debug_terminal') === '1',
     });
@@ -742,6 +765,11 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
       input,
       getSocket: () => wsRef.current,
       isMobile: () => isMobileRef.current,
+      isReadOnly: () => readOnlyRef.current,
+      scrollReadOnly: (lines) => {
+        viewHistoryTouchedRef.current = true;
+        readOnlyScrollRef.current?.(lines);
+      },
       sessionId,
       hostId,
       logger,
@@ -772,7 +800,8 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
     } catch (e) {
       // 컨테이너가 아직 0x0 인 극단 케이스 방어
     }
-    term.focus();
+    setTerminalReadOnly(term, readOnlyRef.current);
+    if (!readOnlyRef.current) term.focus();
 
     /* preflight 로 WS 오픈을 gating. 다른 기기가 이미 attach 중이면 건드리지 않고 evicted
        오버레이만 띄운다 — 사용자가 "내가 가져오기" 를 누를 때까지 기다린다. */
@@ -933,6 +962,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
         tmuxSuffix,
         tmuxSessionName,
         createIfMissing,
+        sessionMeta: !hostId,
         clientId: terminalClientIdRef.current,
         reason: connectReasonRef.current,
         prevMs: prevSocketLivedMsRef.current,
@@ -1149,6 +1179,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
     // busy on/off 가 깜빡 보였음). App.jsx 가 별도 윈도우로 fade-out 처리.
     let lastActivityDispatch = 0;
     const dispatchActivity = () => {
+      if (document.hidden) return;
       const now = Date.now();
       if (now - lastActivityDispatch < 100) return;
       lastActivityDispatch = now;
@@ -1207,10 +1238,16 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
             setAuthPrompt(msg);
             return;
           }
+          if (msg && msg.type === 'session-meta') {
+            setActiveMultiplexer(normalizeMultiplexer(msg.multiplexer));
+            setMuxMissing(null);
+            return;
+          }
           /* `tmux-missing` 은 옛 이름이다. 브라우저에 낡은 번들이 남아 있을 수 있는
              것처럼 그 반대도 있다(백엔드만 먼저 롤백) — 둘 다 받는 값이 싸다. */
           if (msg && (msg.type === 'mux-missing' || msg.type === 'tmux-missing')) {
             setMuxMissing(String(msg.multiplexer || 'tmux'));
+            setActiveMultiplexer(NONE);
             return;
           }
           if (msg && msg.type === 'connect-failed') {
@@ -1581,6 +1618,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
     probeLivenessRef.current = probeLiveness;
 
     term.onData((data) => {
+      if (readOnlyRef.current) return;
       // 입력 = 활동 → idle 로 반납됐던 WebGL 재부착 + idle 카운트다운 리셋(타이핑 즉시 또렷하게).
       webglRef.current?.noteActivity();
       if (isTerminalAutoResponse(data)) {
@@ -1588,14 +1626,6 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
           console.debug('[xterm] dropped terminal auto-response from input stream', JSON.stringify(data));
         }
         return;
-      }
-      // term.onData 는 IME 합성 중 매 음절마다 (backspace+새글자) length>=2 청크가 들어와
-      // 히스토리가 한 글자씩 쪼개져 저장되는 노이즈가 심하다. 이 경로에서는 더 이상 캡처하지 않고,
-      // 서버 히스토리는 sendData() 명시적 호출 경로 (Quick Input / 음성 / MobileToolbar 등) 만 캡처한다.
-      // 단 대용량 paste/장문 bulk 입력은 네트워크 절체 때 복구할 수 있게 로컬 최근 5개에만 남긴다.
-      // The optional local-scroll preview separately saves complete Enter submissions, never IME fragments.
-      if (looksLikeRecoverableBulkInput(data)) {
-        try { pushLocalCommandHistory(sessionId, data); } catch { /* noop */ }
       }
       // 예측 입력 — 인쇄 가능 문자면 RTT 안 기다리고 유령으로 즉시 표시(엔진 내부에서 안전 필터).
       predictiveEchoRef.current?.onInput(data);
@@ -1647,6 +1677,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
       interactions.detach();
       fileDrop.detach();
       iosHangul.dispose();
+      imeTextareaGuard?.dispose();
       iosHangulRef.current = null;
       try { wsRef.current?.close(); } catch {}
       connectRef.current = null;
@@ -1815,7 +1846,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
     refs: {
       xtermRef, wsRef, searchAddonRef, iosHangulRef, inputPreviewRef,
       enqueueInputRef, forceScrollToBottomRef, fitNowRef, webglRef,
-      lastDimsRef, evictedRef, endedRef, hasContentRef,
+      lastDimsRef, evictedRef, endedRef, hasContentRef, readOnlyRef, prepareInputModeRef,
     },
     forwardedRef: ref,
     sessionId,
@@ -1824,16 +1855,21 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
     isReady,
   });
 
+  useEffect(() => {
+    setTerminalReadOnly(xtermRef.current, readOnly);
+    if (readOnly) inputRef.current?.clear();
+  }, [readOnly, isReady]);
+
   // 키보드 포커스는 visible 한 pane 들 중 "focused" 한 1개에만 줘야 한다.
   // 분할(grid) 레이아웃에서 4 pane 모두 isActive=true 이지만 isFocused 는 1개뿐.
   useEffect(() => {
-    if (isActive && isFocused && xtermRef.current && isReady) {
+    if (!readOnly && isActive && isFocused && xtermRef.current && isReady) {
       const timer = setTimeout(() => {
-        xtermRef.current?.focus();
+        if (!readOnlyRef.current) xtermRef.current?.focus();
       }, 50);
       return () => clearTimeout(timer);
     }
-  }, [isActive, isFocused, isReady]);
+  }, [isActive, isFocused, isReady, readOnly]);
 
   // 활성 복귀 시 비활성 동안 쌓인 출력을 즉시 flush. tmux 도 별도로 화면 redraw 를 보내옴.
   useEffect(() => {
@@ -2143,7 +2179,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
       <style>{TERMINAL_CSS}</style>
 
       {/* 스켈레톤: 첫 콘텐츠가 그려지기 전까지 표시 */}
-      {!hasContent && <TerminalSkeleton themeUi={themeUi} />}
+      {isActive && !hasContent && <TerminalSkeleton themeUi={themeUi} />}
 
       {/* 로딩이 오래 멈춰 있을 때 — 어느 쪽(이 기기 vs 서버) 문제인지 명시하고,
           그 상황에서 실제로 되는 선택지만 준다. */}
@@ -2164,7 +2200,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
       <div
         ref={terminalRef}
         onClick={() => {
-          if (xtermRef.current) {
+          if (!readOnlyRef.current && xtermRef.current) {
             xtermRef.current.focus();
           }
         }}
@@ -2203,10 +2239,14 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
         fitNowRef={fitNowRef}
         sessionId={hostId ? (effectiveTmuxSession || tmuxSessionName) : sessionId}
         hostId={hostId}
-        enabled={settings.showTerminalScrollbar !== false}
+        enabled={readOnly || settings.showTerminalScrollbar === true}
+        scrollLinesRef={readOnlyScrollRef}
+        finishViewingRef={finishViewingRef}
+        onHistorySeek={markViewHistory}
         showInputOnScroll={settings.showInputOnScroll === true}
         inputPreviewRef={inputPreviewRef}
         historyKey={sessionId}
+        tmuxBacked={(activeMultiplexer || selectedMultiplexer) === TMUX}
         active={isActive}
         ready={isReady}
         theme={currentTheme}
@@ -2220,7 +2260,8 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
         <div
           ref={touchOverlayRef}
           aria-hidden="true"
-          onClick={() => xtermRef.current?.focus()}
+          onClick={() => { if (!readOnlyRef.current) xtermRef.current?.focus(); }}
+          data-testid="terminal-touch-overlay"
           style={{
             position: 'absolute',
             inset: 0,
@@ -2261,9 +2302,10 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
             setContextMenu(null);
           }}
           onPaste={async () => {
+            if (readOnlyRef.current) return;
             try {
               const text = await navigator.clipboard.readText();
-              if (text && xtermRef.current) {
+              if (text && !readOnlyRef.current && xtermRef.current) {
                 xtermRef.current.paste(text);
               }
             } catch {}
@@ -2274,7 +2316,8 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
             xtermRef.current?.scrollToBottom();
             setContextMenu(null);
           }}
-          onUploadFile={() => { fileUploadRef.current?.click(); setContextMenu(null); }}
+          readOnly={readOnly}
+          onUploadFile={readOnly ? null : () => { fileUploadRef.current?.click(); setContextMenu(null); }}
           onScreenDump={() => {
             const term = xtermRef.current;
             if (term) {
@@ -2370,7 +2413,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
               wsRef.current?.send(JSON.stringify({ type: 'auth-response', values }));
             } catch { /* noop */ }
             setAuthPrompt(null);
-            setTimeout(() => xtermRef.current?.focus(), 100);
+            setTimeout(() => { if (!readOnlyRef.current) xtermRef.current?.focus(); }, 100);
           }}
           onCancel={() => {
             try {

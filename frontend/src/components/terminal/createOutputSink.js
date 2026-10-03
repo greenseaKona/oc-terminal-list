@@ -33,13 +33,12 @@ const WRITE_CHUNK_BYTES = 256 * 1024;
    창을 거치지 않고 그 자리에서 그려진다. 여기서 정하는 것은 **지속 출력**(빌드 로그가
    쏟아질 때)의 렌더 횟수뿐이고, 그 구간의 중간 프레임은 사람이 읽지 못한다.
 
-   60 → 30 → 20fps 로 두 번 내려왔다. 첫 번째(60→30)에서 아무도 차이를 못 느꼈고,
-   같은 논리가 그대로 이어진다: 스크롤하며 흘러가는 글자는 어느 쪽이든 못 읽는다.
-   대신 지속 출력 한 구간마다 파싱+드로우가 1/3 줄어든다. 더 내리면 그때는 스크롤이
-   끊겨 보이기 시작한다 — 여기가 바닥이다. */
+   데스크탑은 20fps 가 시각적 바닥이다. 폰은 작은 화면에서 중간 프레임을 더 읽기 어렵고
+   냉각 여유가 작으므로 10fps 로 제한한다. 둘 다 리딩엣지는 즉시라 입력 반응은 그대로다. */
 export const COALESCE_FOCUSED_MS = 50;   // ~20fps — 지금 보고 있는 pane
 export const COALESCE_VISIBLE_MS = 80;   // ~12fps — 보이지만 포커스는 아닌 분할 형제
 export const COALESCE_INACTIVE_MS = 50;  // 안 보이는 pane — 어차피 버퍼에 쌓기만 한다
+export const COALESCE_MOBILE_MS = 100;   // ~10fps — phone thermal budget; leading edge stays immediate
 /* 이북(전자잉크) 모드 — 이 값이 이 모드의 **핵심 절감**이다.
    전자잉크는 화면 갱신 한 번이 100~300ms 다. 30fps 로 밀어 넣으면 패널이 못 따라와
    잔상만 쌓이고, 사람이 읽을 수 있는 중간 프레임도 아니다. 창을 300ms(~3fps)로 벌리면
@@ -47,7 +46,17 @@ export const COALESCE_INACTIVE_MS = 50;  // 안 보이는 pane — 어차피 버
    리딩엣지는 그대로라 조용하다 온 첫 바이트(=키 입력 에코)는 여전히 즉시 그려진다. */
 export const COALESCE_EINK_MS = 300;
 
-const createOutputSink = ({ term, isActive, isFocused = () => true, isEink = () => false, onServerOutput, onNewData, onContent }) => {
+const createOutputSink = ({
+  term,
+  isActive,
+  isFocused = () => true,
+  isVisible = () => true,
+  isMobile = () => false,
+  isEink = () => false,
+  onServerOutput,
+  onNewData,
+  onContent,
+}) => {
   let buffer = [];
   let flushTimer = null;
   let pendingWriteBytes = 0;
@@ -59,6 +68,7 @@ const createOutputSink = ({ term, isActive, isFocused = () => true, isEink = () 
     // 우리 우선순위가 아니기 때문이다.
     if (isEink()) return COALESCE_EINK_MS;
     if (!isActive()) return COALESCE_INACTIVE_MS;
+    if (isMobile()) return COALESCE_MOBILE_MS;
     return isFocused() ? COALESCE_FOCUSED_MS : COALESCE_VISIBLE_MS;
   };
 
@@ -91,7 +101,7 @@ const createOutputSink = ({ term, isActive, isFocused = () => true, isEink = () 
     if (buffer.length === 0) return;
 
     // 비활성 pane — 파싱/렌더를 미룬다. 활성 복귀 시 호출부가 flush() 를 다시 부른다.
-    if (!isActive()) {
+    if (!isActive() || !isVisible()) {
       dropOldestIfOverCap();
       return;
     }

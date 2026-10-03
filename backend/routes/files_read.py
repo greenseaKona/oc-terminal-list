@@ -19,12 +19,16 @@ from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Re
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+import host_sftp
 from _deps import AUTH_COOKIE_NAME, WORKSPACE_ROOT, validate_path, verify_auth_token
 from file_index import (
-    _FILE_INDEX_IGNORED, _FILE_INDEX_TTL, _build_file_index, _file_index_cache,
+    _FILE_INDEX_IGNORED,
+    _FILE_INDEX_TTL,
+    _build_file_index,
+    _file_index_cache,
 )
+from file_revision import content_revision
 from routes.local_git import get_git_status_dict as get_git_status
-import host_sftp
 from tickets import _consume_file_ticket
 
 logger = logging.getLogger(__name__)
@@ -387,8 +391,7 @@ async def read_file(path: str = Query(...), username: str = Depends(verify_auth_
     if safe.stat().st_size > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 10MB)")
     try:
-        return {"content": safe.read_text(encoding="utf-8"), "path": path}
+        data = safe.read_bytes()
+        return {"content": data.decode("utf-8"), "path": path, "revision": content_revision(data)}
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="Binary file not supported")
-
-

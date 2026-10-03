@@ -13,9 +13,9 @@
 from __future__ import annotations
 
 import time
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, patch
 from fastapi import HTTPException
 
 import routes.files_write as fw
@@ -27,9 +27,15 @@ class _Upload:
 
     def __init__(self, data: bytes = b"PNG-BYTES"):
         self._data = data
+        self._pos = 0
 
     async def read(self, _n: int = -1) -> bytes:
-        return self._data
+        start = self._pos
+        self._pos = min(len(self._data), start + _n)
+        return self._data[start:self._pos]
+
+    async def seek(self, pos):
+        self._pos = pos
 
 
 @pytest.fixture(autouse=True)
@@ -40,11 +46,20 @@ def _clear_cache():
 
 
 def _patches(write_side_effect, home="/home/me"):
+    async def upload(host, secrets, path, chunks):
+        size = 0
+        async for chunk in chunks:
+            size += len(chunk)
+        if isinstance(write_side_effect, Exception):
+            raise write_side_effect
+        if write_side_effect is not None:
+            write_side_effect(host, secrets, path, b"")
+        return size
     return (
         patch.object(fw, "resolve_host_with_secrets", AsyncMock(return_value=({"id": "h1"}, {}))),
         patch.object(fw.host_sftp, "create_item", AsyncMock(return_value=None)),
         patch.object(fw.host_sftp, "remote_home", AsyncMock(return_value=home)),
-        patch.object(fw.host_sftp, "write_file", AsyncMock(side_effect=write_side_effect)),
+        patch.object(fw.host_sftp, "upload_stream", AsyncMock(side_effect=upload)),
     )
 
 
@@ -133,3 +148,23 @@ async def test_cache_expires_so_a_full_tmp_is_not_a_life_sentence():
         out = await _paste()
     # 만료됐으니 /tmp 를 다시 시도했고, 이제 되니까 /tmp 로 돌아간다.
     assert out["path"] == f"{remote_paste_dir()}/shot.png"
+
+
+async def test_remote_paste_reads_bounded_chunks_and_rewinds_on_fallback():
+    class BoundedUpload(_Upload):
+        async def read(self, size):
+            assert 0 < size <= 1024 * 1024
+            return await super().read(size)
+    payload = b"x" * (1024 * 1024 + 7)
+    transferred = []
+    async def upload(host, secrets, path, chunks):
+        data = b"".join([part async for part in chunks])
+        transferred.append(data)
+        if path.startswith("/tmp/"):
+            raise fw.HostConnectError("full")
+        return len(data)
+    p1, p2, p3, _ = _patches(None)
+    with p1, p2, p3, patch.object(fw.host_sftp, "upload_stream", upload):
+        result = await fw._save_remote_paste("h1", "u", BoundedUpload(payload), "file.bin")
+    assert result["size"] == len(payload)
+    assert transferred == [payload, payload]

@@ -34,6 +34,45 @@ const rgba = (hex, alpha) => {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 };
 
+const rgbChannels = (color) => {
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color || '');
+  if (hex) {
+    const value = expand(hex[1]);
+    return [0, 2, 4].map((index) => parseInt(value.slice(index, index + 2), 16));
+  }
+  const rgb = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(color || '');
+  return rgb ? rgb.slice(1, 4).map(Number) : null;
+};
+
+const colorLuminance = (color) => {
+  const channels = rgbChannels(color);
+  if (!channels) return null;
+  const linear = channels.map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+};
+
+const colorContrast = (first, second) => {
+  const values = [colorLuminance(first), colorLuminance(second)];
+  if (values.some((value) => value == null)) return null;
+  const [high, low] = values.sort((a, b) => b - a);
+  return (high + 0.05) / (low + 0.05);
+};
+
+export const readableForeground = (background, preferred) => {
+  const preferredContrast = colorContrast(background, preferred);
+  if (preferredContrast == null || preferredContrast >= 4.5) return preferred;
+  return colorContrast(background, '#ffffff') >= colorContrast(background, '#000000')
+    ? '#ffffff' : '#000000';
+};
+
+export const withAlpha = (color, alpha) => {
+  const channels = rgbChannels(color);
+  return channels ? `rgba(${channels.join(', ')}, ${alpha})` : color;
+};
+
 // hex 섞기 (col1 과 col2 를 t 비율로) — 사이드바 surface 단계 도출용
 /* ⚠️ 6자리 hex 만 받는다. 3자리 축약을 넘기면 조용히 **다른 색**이 된다 —
    parseInt('fff', 16) 은 0xffffff 가 아니라 0x000fff, 즉 흰색이 아니라 파랑이다.

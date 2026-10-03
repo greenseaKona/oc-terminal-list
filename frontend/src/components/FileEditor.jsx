@@ -44,6 +44,7 @@ const FileEditor = ({ activeFile, openFiles, onFileSelect, onClose, onCloseAll =
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [saveError, setSaveError] = useState(null);
   const [status, setStatus] = useState('idle'); // 'idle' | 'saved' | 'error'
   const [confirmClose, setConfirmClose] = useState({ isOpen: false, fileKey: null });
   const [externalChange, setExternalChange] = useState({ isOpen: false, fileKey: null, newContent: '' });
@@ -117,7 +118,7 @@ const FileEditor = ({ activeFile, openFiles, onFileSelect, onClose, onCloseAll =
         if (isSilent && existing) {
           if (existing.hasChanges) {
             // 사용자도 편집 중 + 디스크도 바뀜 → 충돌 → 모달
-            setExternalChange({ isOpen: true, fileKey, newContent: data.content });
+            setExternalChange({ isOpen: true, fileKey, newContent: data.content, revision: data.revision });
             return prev;
           }
           // 편집 중 아님 → 조용히 새 내용으로 갱신
@@ -127,6 +128,7 @@ const FileEditor = ({ activeFile, openFiles, onFileSelect, onClose, onCloseAll =
               content: data.content,
               hasChanges: false,
               lastSavedContent: data.content,
+              revision: data.revision,
             },
           };
         }
@@ -137,6 +139,7 @@ const FileEditor = ({ activeFile, openFiles, onFileSelect, onClose, onCloseAll =
             content: data.content,
             hasChanges: false,
             lastSavedContent: data.content,
+            revision: data.revision,
           },
         };
       });
@@ -322,7 +325,7 @@ const FileEditor = ({ activeFile, openFiles, onFileSelect, onClose, onCloseAll =
   const saveFile = useCallback(async () => {
     if (!hasChanges || saving || !activeFile) return;
     setSaving(true);
-    setError(null);
+    setSaveError(null);
 
     try {
       const { path: savePath, hostId: saveHostId } = parseFileKey(activeFile);
@@ -330,7 +333,7 @@ const FileEditor = ({ activeFile, openFiles, onFileSelect, onClose, onCloseAll =
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ path: savePath, content })
+        body: JSON.stringify({ path: savePath, content, expectedRevision: currentFileState.revision })
       });
 
       if (!res.ok) {
@@ -338,12 +341,14 @@ const FileEditor = ({ activeFile, openFiles, onFileSelect, onClose, onCloseAll =
         throw new Error(errorData.detail || 'Failed to save file');
       }
 
+      const saved = await res.json();
       setFileStates(prev => ({
         ...prev,
         [activeFile]: {
           ...prev[activeFile],
-          hasChanges: false,
-          lastSavedContent: content
+          hasChanges: prev[activeFile]?.content !== content,
+          lastSavedContent: content,
+          revision: saved.revision
         }
       }));
       setStatus('saved');
@@ -352,12 +357,12 @@ const FileEditor = ({ activeFile, openFiles, onFileSelect, onClose, onCloseAll =
       setTimeout(() => setStatus('idle'), 2000);
     } catch (error) {
       console.error('Failed to save file:', error);
-      setError(error.message);
+      setSaveError(error.message);
       setStatus('error');
     } finally {
       setSaving(false);
     }
-  }, [activeFile, content, hasChanges, saving, loadOriginalContent]);
+  }, [activeFile, content, hasChanges, saving, currentFileState.revision, loadOriginalContent]);
 
   // Prettier "Format Document" — 등록된 프로바이더(setupMonaco)를 통해 동작.
   // 버튼/모바일 접근성용 명시 트리거. 키보드는 네이티브 Shift+Alt+F 가 이미 붙는다.
@@ -427,13 +432,15 @@ const FileEditor = ({ activeFile, openFiles, onFileSelect, onClose, onCloseAll =
   const handleReload = () => {
     const fileKey = externalChange.fileKey;
     const newContent = externalChange.newContent;
+    const revision = externalChange.revision;
     setExternalChange({ isOpen: false, fileKey: null, newContent: '' });
     setFileStates(prev => ({
       ...prev,
       [fileKey]: {
         content: newContent,
         hasChanges: false,
-        lastSavedContent: newContent
+        lastSavedContent: newContent,
+        revision
       }
     }));
   };
@@ -514,6 +521,7 @@ const FileEditor = ({ activeFile, openFiles, onFileSelect, onClose, onCloseAll =
               <CheckCircle2 size={12} /> {t('settingsSaved')}
             </div>
           )}
+          {saveError && <span role="alert" style={{ color: theme.red }}>{saveError}</span>}
           {!isPreviewMode && !isDiffView && canFormatLanguage(getLanguage(activeFile)) && (
             <Button
               variant="ghost"

@@ -16,6 +16,13 @@ const fullSettings = {
 };
 
 describe('Settings', () => {
+  it('shows the terminal scrollbar toggle off when no preference was saved', () => {
+    render(<Settings isOpen onClose={vi.fn()} settings={fullSettings} onSave={vi.fn()} />);
+
+    expect(screen.getByRole('switch', { name: /Show terminal scrollbar/ }))
+      .toHaveAttribute('aria-checked', 'false');
+  });
+
   it('places the Korean input preview option directly after the scrollbar and saves it', () => {
     const onSave = vi.fn();
     render(<Settings isOpen onClose={vi.fn()} settings={{ ...fullSettings, language: 'ko' }} onSave={onSave} />);
@@ -69,6 +76,22 @@ describe('Settings', () => {
 
     expect(screen.getByTestId('glass-modal-overlay')).toHaveStyle({ zIndex: '200001' });
     expect(screen.getByRole('dialog').style.backdropFilter).toMatch(/blur\(.*20px\)/);
+  });
+
+  it('marks the three-action footer for the narrow-screen stacked layout', () => {
+    render(
+      <Settings
+        isOpen={true}
+        onClose={vi.fn()}
+        settings={fullSettings}
+        onSave={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Reset to Default' }).closest('footer'))
+      .toHaveClass('iterm-settings-action-footer');
+    expect(screen.getByText(/^Cancel$/).parentElement)
+      .toHaveClass('iterm-settings-action-footer-actions');
   });
 
   it('does not crash when scrollSensitivity is undefined (legacy storage)', () => {

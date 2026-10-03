@@ -174,7 +174,7 @@ export const AuthPromptOverlay = ({ prompt, themeUi, t, onSubmit, onCancel }) =>
   );
 };
 
-export const TerminalContextMenu = ({ x, y, hasSelection, linkUrl, themeUi, t, onCopy, onCopyLink, onCopyAll, onPaste, onRefresh, onScrollToBottom, onUploadFile, onScreenDump, onClose }) => {
+export const TerminalContextMenu = ({ x, y, hasSelection, linkUrl, themeUi, t, onCopy, onCopyLink, onCopyAll, onPaste, onRefresh, onScrollToBottom, onUploadFile, onScreenDump, onClose, readOnly = false }) => {
   const ref = useRef(null);
   const [pos, setPos] = useState({ x, y });
   const [measured, setMeasured] = useState(false);
@@ -209,8 +209,8 @@ export const TerminalContextMenu = ({ x, y, hasSelection, linkUrl, themeUi, t, o
     items.push({ icon: LinkIcon, label: t('copyLink') || 'Copy link', action: onCopyLink });
   }
   items.push({ icon: Scissors, label: t('copyAll') || 'Copy all', action: onCopyAll });
-  items.push({ icon: ClipboardPaste, label: t('paste') || 'Paste', action: onPaste });
-  if (onUploadFile) {
+  if (!readOnly) items.push({ icon: ClipboardPaste, label: t('paste') || 'Paste', action: onPaste });
+  if (!readOnly && onUploadFile) {
     items.push({ icon: Upload, label: t('sendFile') || 'Send file', action: onUploadFile });
   }
   if (onRefresh) {

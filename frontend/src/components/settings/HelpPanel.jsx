@@ -41,7 +41,7 @@ const HelpPanel = ({ t }) => {
   return (
     <>
       <div style={S.searchRow}>
-        <Search size={13} strokeWidth={2} style={{ color: color.subtext, flexShrink: 0 }} />
+        <Search size={14} strokeWidth={2} style={{ color: color.subtext, flexShrink: 0 }} />
         <input
           type="text"
           value={query}
@@ -97,7 +97,7 @@ const S = {
     alignItems: 'center',
     gap: space['2'],
     padding: `0 ${space['3']}`,
-    height: '32px',
+    height: '40px',
     marginBottom: space['3'],
     background: color.surface0,
     border: `1px solid ${color.border}`,
@@ -111,7 +111,7 @@ const S = {
     outline: 'none',
     color: color.text,
     fontFamily: font.sans,
-    fontSize: fontSize['12'],
+    fontSize: fontSize['13'],
   },
   list: {
     display: 'flex',

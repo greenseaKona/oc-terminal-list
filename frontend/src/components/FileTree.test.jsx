@@ -148,9 +148,9 @@ describe('FileTree skeleton loading', () => {
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
         '/api/files/download?path=archive.zip',
-        expect.objectContaining({ headers: expect.any(Object) }),
+        expect.objectContaining({ method: 'HEAD', credentials: 'same-origin' }),
       );
-      expect(URL.createObjectURL).toHaveBeenCalled();
+      expect(URL.createObjectURL).not.toHaveBeenCalled();
       expect(screen.getByText('downloadStarted')).toBeTruthy();
     });
   });
@@ -184,9 +184,9 @@ describe('FileTree skeleton loading', () => {
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
         '/api/hosts/host-1/files/download?path=%2Ftmp%2Fremote.bin',
-        expect.objectContaining({ headers: expect.any(Object) }),
+        expect.objectContaining({ method: 'HEAD', credentials: 'same-origin' }),
       );
-      expect(URL.createObjectURL).toHaveBeenCalled();
+      expect(URL.createObjectURL).not.toHaveBeenCalled();
       expect(screen.getByText('downloadStarted')).toBeTruthy();
     });
   });
@@ -220,9 +220,9 @@ describe('FileTree skeleton loading', () => {
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
         '/api/hosts/host-1/files/download?path=%2Ftmp%2Fbundle',
-        expect.objectContaining({ headers: expect.any(Object) }),
+        expect.objectContaining({ method: 'HEAD', credentials: 'same-origin' }),
       );
-      expect(URL.createObjectURL).toHaveBeenCalled();
+      expect(URL.createObjectURL).not.toHaveBeenCalled();
       expect(screen.getByText('downloadStarted')).toBeTruthy();
     });
   });

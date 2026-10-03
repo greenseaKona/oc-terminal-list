@@ -73,7 +73,7 @@ const Settings = ({
   const footer = SETTINGS_TABS.has(tab) ? (
     <>
       <Button variant="ghost" onClick={reset} icon={RotateCcw}>{t('reset')}</Button>
-      <div style={{ display: 'flex', gap: space['1.5'] }}>
+      <div className="iterm-settings-action-footer-actions" style={{ display: 'flex', gap: space['1.5'] }}>
         <Button variant="secondary" onClick={onClose}>{t('cancel')}</Button>
         <Button variant="primary" onClick={save}>{t('save')}</Button>
       </div>
@@ -107,6 +107,7 @@ const Settings = ({
       bodyStyle={styles.body}
       footer={footer}
       footerStyle={styles.footer}
+      footerClassName={SETTINGS_TABS.has(tab) ? 'iterm-settings-action-footer' : null}
     >
       {tab === 'general' && (
         <GeneralPanel s={s} change={change} username={username} onLogout={onLogout} t={t} />

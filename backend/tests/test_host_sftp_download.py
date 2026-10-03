@@ -7,7 +7,6 @@ import host_sftp
 import sftp_tailscale
 from host_manager import HostConnectError
 
-
 # ---------------------- Tailscale 경로 ----------------------
 
 
@@ -169,6 +168,71 @@ async def test_sftp_download_single_file(monkeypatch):
     assert data == b"hello world"
     assert filename == "notes.txt"
     assert media_type == "application/octet-stream"
+
+
+@pytest.mark.asyncio
+async def test_sftp_stream_allows_single_file_over_200_mib(monkeypatch):
+    sftp = _FakeSftp({
+        "/archive.tar.gz": (_FakeAttrs(size=host_sftp.MAX_DOWNLOAD_BYTES + 1), None, b"archive chunk"),
+    })
+    async def fake_open(host, secrets):
+        return _FakeConn(sftp)
+    monkeypatch.setattr(host_sftp, "_get_or_open", fake_open)
+    filename, media_type, stream = await host_sftp.open_download(
+        {"id": "h1", "auth_method": "key"}, {}, ["/archive.tar.gz"])
+    assert filename == "archive.tar.gz"
+    assert media_type == "application/octet-stream"
+    assert b"".join([chunk async for chunk in stream]) == b"archive chunk"
+
+
+@pytest.mark.asyncio
+async def test_tailscale_stream_allows_large_single_file_without_buffering(monkeypatch):
+    async def info(host, path):
+        return False, host_sftp.MAX_DOWNLOAD_BYTES + 1
+    async def stream(host, path):
+        yield b"archive chunk"
+    async def buffered(*args):
+        pytest.fail("single files must not use the buffered ZIP transport")
+    monkeypatch.setattr(sftp_tailscale, "file_info", info)
+    monkeypatch.setattr(sftp_tailscale, "download_stream", stream)
+    monkeypatch.setattr(sftp_tailscale, "download_items", buffered)
+    filename, media_type, body = await host_sftp.open_download(
+        {"id": "h1", "auth_method": "tailscale"}, {}, ["/archive.tar.gz"])
+    assert filename == "archive.tar.gz"
+    assert media_type == "application/octet-stream"
+    assert b"".join([chunk async for chunk in body]) == b"archive chunk"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error,status", [(FileNotFoundError(), 404), (PermissionError(), 403)])
+async def test_remote_download_head_reports_file_errors(monkeypatch, error, status):
+    from fastapi import HTTPException
+
+    from routes import host_files
+    async def resolve(*args):
+        return {"id": "h1"}, {}
+    async def info(*args):
+        raise error
+    monkeypatch.setattr(host_files, "resolve_host_with_secrets", resolve)
+    monkeypatch.setattr(host_sftp, "download_info", info)
+    with pytest.raises(HTTPException) as caught:
+        await host_files.head_host_file_download("h1", "/missing", "u")
+    assert caught.value.status_code == status
+
+
+@pytest.mark.asyncio
+async def test_remote_download_head_returns_size_without_streaming(monkeypatch):
+    from routes import host_files
+    async def resolve(*args):
+        return {"id": "h1"}, {}
+    async def info(*args):
+        return {"filename": "archive.tar.gz", "size": host_sftp.MAX_DOWNLOAD_BYTES + 1,
+                "media_type": "application/octet-stream"}
+    monkeypatch.setattr(host_files, "resolve_host_with_secrets", resolve)
+    monkeypatch.setattr(host_sftp, "download_info", info)
+    response = await host_files.head_host_file_download("h1", "/archive.tar.gz", "u")
+    assert response.status_code == 200
+    assert response.headers["content-length"] == str(host_sftp.MAX_DOWNLOAD_BYTES + 1)
 
 
 @pytest.mark.asyncio

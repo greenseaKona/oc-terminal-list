@@ -9,9 +9,16 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 
-from routes.terminal_scroll import parse_state, scroll_script, scroll_terminal
+from routes.terminal_scroll import (
+    ScrollRequest,
+    get_scroll,
+    parse_state,
+    scroll_script,
+    scroll_terminal,
+    set_scroll,
+)
 
 
 @unittest.skipUnless(shutil.which("tmux"), "tmux is required for isolated history tests")
@@ -70,12 +77,46 @@ class ScrollHistoryTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("INJECTED", result.stdout)
 
+    @unittest.skipUnless(shutil.which("zsh"), "zsh is required for remote login-shell compatibility")
+    def test_seek_script_runs_under_zsh(self):
+        output = subprocess.check_output(
+            ["zsh", "-fc", scroll_script(self.base, "history", 40)],
+            env=self.env,
+            text=True,
+            timeout=3,
+        )
+
+        self.assertEqual(parse_state(output)["offset"], 40)
+        self.state(0)
+
+    def test_seek_batches_metadata_and_mutation_commands(self):
+        script = scroll_script(self.base, "history", 40)
+
+        self.assertTrue(script.startswith("state=$("))
+        self.assertNotIn("pane=$(", script)
+        self.assertNotIn("mode=$(", script)
+        self.assertNotIn("hist=$(", script)
+        self.assertIn(r"\;", script)
+
     def test_malformed_or_other_mode_is_unavailable(self):
         self.assertEqual(parse_state(""), {"available": False})
         self.assertFalse(parse_state("%1|20|0|24|tree-mode")["available"])
 
 
 class ScrollAuthorizationTest(unittest.IsolatedAsyncioTestCase):
+    async def test_routes_prevent_caching_terminal_content(self):
+        with patch("routes.terminal_scroll.scroll_terminal", AsyncMock(return_value={"available": True})):
+            for call in (
+                lambda response: get_scroll(response, "session", username="me"),
+                lambda response: set_scroll(
+                    ScrollRequest(session_id="session", offset=0), response, username="me"
+                ),
+            ):
+                with self.subTest(call=call):
+                    response = Response()
+                    self.assertEqual(await call(response), {"available": True})
+                    self.assertEqual(response.headers["Cache-Control"], "no-store")
+
     async def test_unknown_or_foreign_local_owner_is_rejected_before_tmux(self):
         for owner in [None, "someone-else"]:
             with (

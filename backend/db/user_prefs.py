@@ -5,10 +5,26 @@ SQLiteStorage 에 믹스인으로 합류한다 — 호출부는 그대로 `stora
 """
 from __future__ import annotations
 
-from datetime import datetime
 import asyncio
 import json
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Literal, TypedDict
 
+import anyio
+
+
+class TabStateSnapshot(TypedDict):
+    tabs: list
+    activeTabId: str | None
+    nextTabAddressNumber: int
+    updatedAt: str
+
+
+@dataclass(frozen=True, slots=True)
+class TabStateSaveResult:
+    status: Literal["saved", "unchanged", "conflict"]
+    state: TabStateSnapshot
 
 
 class UserPrefsMixin:
@@ -113,4 +129,54 @@ class UserPrefsMixin:
         await asyncio.to_thread(_save)
         return new_updated_at
 
-    # -------- system config --------
+    async def save_tab_state_checked(
+        self, username: str, tabs: list, active_tab_id: str | None, next_tab_address_number: int = 1,
+        *, if_match: str | None = None,
+    ) -> TabStateSaveResult:
+        """Compare and save one snapshot under SQLite's writer lock."""
+        tabs_json = json.dumps(tabs, ensure_ascii=False)
+
+        def _save() -> TabStateSaveResult:
+            conn = self._get_connection()
+            try:
+                with conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    row = conn.execute(
+                        "SELECT tabs_json, active_tab_id, next_tab_address_number, updated_at "
+                        "FROM tab_state WHERE username = ?", (username,),
+                    ).fetchone()
+                    next_number = max(next_tab_address_number, row["next_tab_address_number"] if row else 1)
+                    if row:
+                        current: TabStateSnapshot = {
+                            "tabs": json.loads(row["tabs_json"]), "activeTabId": row["active_tab_id"],
+                            "nextTabAddressNumber": row["next_tab_address_number"], "updatedAt": row["updated_at"],
+                        }
+                        if (
+                            current["tabs"] == tabs and current["activeTabId"] == active_tab_id
+                            and current["nextTabAddressNumber"] == next_number
+                        ):
+                            return TabStateSaveResult("unchanged", current)
+                        if if_match and if_match != current["updatedAt"]:
+                            return TabStateSaveResult("conflict", current)
+                    new_version = datetime.utcnow().isoformat()
+                    if row and new_version <= row["updated_at"]:
+                        next_time = datetime.fromisoformat(row["updated_at"]) + timedelta(microseconds=1)
+                        new_version = next_time.isoformat()
+                    conn.execute(
+                        "INSERT INTO tab_state "
+                        "(username, tabs_json, active_tab_id, next_tab_address_number, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?) "
+                        "ON CONFLICT(username) DO UPDATE SET tabs_json=excluded.tabs_json, "
+                        "active_tab_id=excluded.active_tab_id, "
+                        "next_tab_address_number=excluded.next_tab_address_number, "
+                        "updated_at=excluded.updated_at",
+                        (username, tabs_json, active_tab_id, next_number, new_version),
+                    )
+                    return TabStateSaveResult("saved", {
+                        "tabs": tabs, "activeTabId": active_tab_id,
+                        "nextTabAddressNumber": next_number, "updatedAt": new_version,
+                    })
+            finally:
+                self._release_connection(conn)
+
+        return await anyio.to_thread.run_sync(_save)

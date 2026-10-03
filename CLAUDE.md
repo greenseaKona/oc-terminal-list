@@ -763,8 +763,34 @@ herdr 를 두 번째 멀티플렉서로 나란히 실었다가 **09-05 에 통�
 
 ## itl — 팬 사이 전달, 설치 없이 (2026-09-02)
 
+### 입력과 엔터 전달 확인 (2026-09-30)
+
+`itl send`는 이름이 겹치지 않는 tmux 버퍼로 본문을 붙여넣고(`paste-buffer -p`), 같은
+tmux 명령 큐에서 엔터를 보낸다. 빠른 문자 입력 직후 엔터가 TUI의 붙여넣기 개행으로
+먹히는 것을 막기 위해 붙여넣기 경계를 명시한다. 제출할 때는 복사 모드도 먼저 빠져나온다.
+`--json` 결과의 `delivery`는 `typed` / `enter-sent` / `queued` / `failed`이고,
+`enterSent`는 엔터 전송 여부다. **에이전트의 작업 수락·완료를 뜻하지 않는다.** 백엔드의
+회신도 엔터 전송·생략·확인 불가를 구분한다. `node` 등 실행기로 보이는 대상은 터미널의
+전면 프로세스 argv로 알려진 에이전트 실행 파일을 확인하며, 타이틀로 엔터를 허용하지 않는다.
+
+기계를 넘는 `itl send`는 기본 70초 동안 요청 ID별 결과를 기다린다(`--wait 0`은 비동기
+전달). 표식 출력 대신 tmux 우편함을 쓰므로 브라우저가 붙어 있지 않아도 된다. 우편함과
+처리 중인 요청 ID는 tmux의 한 명령 큐에서 검사·기록하여 연속 요청이 앞선 내용을
+덮어쓰지 못하게 한다. 백엔드는 전달 성공·실패를 **발신 세션의 신원**으로 되돌려 기록하고
+tmux `wait-for` 신호로 CLI를 깨운다. 주소가 바뀌어도 결과가 다른 팬으로 가지 않는다.
+확인 시간이 지나면 종료 코드 4와 `delivery=unknown`이다. 자동 재전송하지 말고 원래
+발신 팬에서 `itl receipt <요청 ID>`로 확인한다. 세션에는 최근 결과 64개가 남는다.
+
 `itl send 1.2 '…'` 로 다른 탭(다른 기계여도)의 팬에 말을 넣는다. 세 층이고 **크리덴셜을
 호스트로 내보내지 않는다**는 것이 설계의 전부다.
+
+**에이전트 사용 순서:** `itl send` 가 `tmux 소켓 접근 거부`를 반환하면 그 요청은 전달되지
+않았다. `itl --json sandbox-config` 는 tmux 에 접속하지 않고 현재 `$TMUX` 소켓에 맞는 Codex
+권한 설정을 출력한다. 호스트의 `~/.codex/config.toml`에 병합하고 새 Codex 세션을 시작한 뒤
+`itl whoami`로 접근을 확인한다. 같은 샌드박스 안에서 `itl send`/`list`/`whoami`를 반복해도
+권한은 바뀌지 않는다. `sandbox_mode` 또는 실행 옵션 `--sandbox`/`--yolo`가 설정되어 있으면
+권한 프로필이 적용되지 않으므로 함께 정리해야 한다. `열쇠가 없다`는 그다음 단계의 오류이며,
+소켓 접근 거부와 혼동하면 안 된다.
 
 | 층 | 파일 | 하는 일 |
 |---|---|---|
@@ -1070,6 +1096,24 @@ CLI 는 하루 뒤 **다른 모양으로** 돌아왔다(위 "itl" 절). tmux 팬
 ⚠️ **폰트 `preload` 는 로드 완료를 붙잡는다.** 한때 TTF 두 벌(4.2MB)이 임계 경로였다.
 지금은 woff2 + Regular 하나만 preload(892KB). 여기에 다시 얹지 마라.
 
+## xterm IME — 숨은 textarea 를 입력 버퍼로 믿지 마라 (2026-09-17)
+
+xterm 6.0.0 은 `screenReaderMode: false` 여도 대문자·공백·IME 확정 문자열을 숨은 textarea 에
+남길 수 있다. Windows IME 가 조합 밖에서 `keyCode=229` 를 보내면 xterm 의 지연 diff 가 그
+잔여 문자열이나 빠르게 들어온 이웃 키를 새 입력으로 다시 내보낸다. 실제로 한글 입력 중 물리
+영문 키와 수십 글자의 이전 문자열이 PTY 에 주입됐다.
+
+- `isComposing=true` 인 키는 `attachTerminalInteractions` 에서 xterm 으로 보내지 않는다.
+- 데스크톱은 `attachImeTextareaGuard` 가 native handler 뒤 keyup/compositionend 에서 textarea 를
+  비운다. `229` snapshot 전에는 오래된 값만 먼저 제거한다.
+- **compositionend 와 xterm 의 0ms finalize 사이에서 동기 clear 하지 않는다.** 확정 한글 자체가
+  사라진다.
+- **screenReaderMode 에서는 비우지 않는다.** 누적 textarea 는 스크린리더가 읽는 접근성 상태다.
+- iOS 는 `attachIosHangulInput` 이 전담한다. 그 브리지가 active 면 desktop guard 를 붙이지 않는다.
+
+회귀 테스트는 `attachImeTextareaGuard.test.js` 와 `attachTerminalInteractions.test.js`, 실제 xterm
+검증은 Chromium 에서 영문 1회·한글 조합 1회·`229` 잔여 재생 차단을 함께 본다.
+
 ## 클립보드 · 팝업 닫기 — 모바일에서 조용히 죽던 두 규칙 (2026-08-11)
 
 **클립보드 구현은 `utils/clipboard.js` 하나다.** 아이폰에서 "복사 눌러도 안 붙는다" 의 원인:
@@ -1313,7 +1357,8 @@ Terminal.jsx is dominated by a single ~919-line `useEffect` (`[connectionKey, up
   실행되는가"** 를 먼저 물어라 — 이 하나로 출력 렌더·하트비트·health 프로브 세 군데가
   동시에 틀려 있었다. `tab.activePaneId` 는 보장되지 않으므로(`|| panes[0]` 폴백)
   정확히 하나여야 하는 일은 `isFocused` 가 아니라 모듈 레벨 리스로 정한다.
-- **출력 싱크의 코얼레싱 창이 곧 fps 다**(`createOutputSink.js`, 지금 20fps/12fps).
+- **출력 싱크의 코얼레싱 창이 곧 fps 다**(`createOutputSink.js`, 데스크탑 20fps/12fps,
+  모바일 10fps).
   리딩엣지라 조용하다 들어온 첫 바이트는 항상 즉시 그려지고, 창을 늘려도 늘어나는 건
   지속 출력의 병합 폭뿐이다 — **이 숫자는 입력 지연과 무관하다.** 60→30→20 으로 두 번
   내려왔고 아무도 차이를 못 느꼈다. 더 내리면 스크롤이 끊겨 보인다(바닥).

@@ -114,6 +114,43 @@ describe('attachTerminalInteractions', () => {
   });
 
   describe('휠 스크롤 라우팅', () => {
+    it('view mode taps never focus and scrolling uses history without sending mouse input', () => {
+      const scrollReadOnly = vi.fn();
+      term.buffer.active.type = 'alternate';
+      mount({ isMobile: () => true, isReadOnly: () => true, scrollReadOnly });
+      overlay.dispatchEvent(touchEvent('touchstart', 20, 200));
+      overlay.dispatchEvent(touchEvent('touchend', 20, 200));
+      expect(term.focus).not.toHaveBeenCalled();
+      overlay.dispatchEvent(touchEvent('touchstart', 20, 200));
+      overlay.dispatchEvent(touchEvent('touchmove', 20, 100));
+      overlay.dispatchEvent(touchEvent('touchend', 20, 100));
+      expect(scrollReadOnly).toHaveBeenCalled();
+      expect(input.push).not.toHaveBeenCalled();
+      const paste = new Event('paste', { bubbles: true, cancelable: true });
+      paste.clipboardData = { items: [], getData: () => 'unwanted command' };
+      container.dispatchEvent(paste);
+      expect(paste.defaultPrevented).toBe(true);
+      expect(term.paste).not.toHaveBeenCalled();
+    });
+
+    it('cancelled and multi-touch gestures do not open the keyboard or a long-press menu', () => {
+      vi.useFakeTimers();
+      try {
+        mount({ isMobile: () => true });
+        overlay.dispatchEvent(touchEvent('touchstart', 20, 200));
+        overlay.dispatchEvent(touchEvent('touchcancel', 20, 200));
+        vi.advanceTimersByTime(600);
+        overlay.dispatchEvent(touchEvent('touchend', 20, 200));
+        expect(setContextMenu).not.toHaveBeenCalled();
+        expect(term.focus).not.toHaveBeenCalled();
+        overlay.dispatchEvent(touchEvent('touchstart', 20, 200, 2));
+        overlay.dispatchEvent(touchEvent('touchend', 20, 200));
+        expect(term.focus).not.toHaveBeenCalled();
+        overlay.dispatchEvent(touchEvent('touchstart', 20, 200));
+        overlay.dispatchEvent(touchEvent('touchend', 20, 200));
+        expect(term.focus).toHaveBeenCalledOnce();
+      } finally { vi.useRealTimers(); }
+    });
     const wheel = (deltaY, deltaMode = 0) => term.handlers.wheel({ deltaY, deltaMode, clientX: 55, clientY: 45 });
 
     it('일반 버퍼에서는 xterm 스크롤백을 직접 굴린다', () => {
@@ -201,10 +238,10 @@ describe('attachTerminalInteractions', () => {
   });
 
   describe('모바일 터치', () => {
-    it('세로 드래그는 스크롤한다', () => {
+    it('세로 드래그는 스크롤한다 (감쇠 ×0.5)', () => {
       mount();
       overlay.dispatchEvent(touchEvent('touchstart', 100, 200));
-      overlay.dispatchEvent(touchEvent('touchmove', 100, 140)); // 위로 60px
+      overlay.dispatchEvent(touchEvent('touchmove', 100, 80)); // 위로 120px → 감쇠 후 60px
 
       expect(term.scrollLines).toHaveBeenCalledWith(3);
     });
@@ -399,6 +436,14 @@ describe('attachTerminalInteractions', () => {
         expect(term.handlers.key(e), JSON.stringify(ev)).toBe(false);
         expect(e.preventDefault, JSON.stringify(ev)).not.toHaveBeenCalled();
       }
+    });
+
+    it('윈도우 한글 조합 중 물리 영문 키는 xterm이 보내지 않는다', () => {
+      mount();
+      const event = keyEvent({ key: 'f', code: 'KeyF', keyCode: 70, isComposing: true });
+
+      expect(term.handlers.key(event)).toBe(false);
+      expect(event.preventDefault).not.toHaveBeenCalled();
     });
 
     it('평범한 글자는 그대로 터미널로 간다 — 판정이 너무 넓으면 입력이 죽는다', () => {

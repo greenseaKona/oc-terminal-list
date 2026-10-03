@@ -19,6 +19,7 @@ N² 이 되지 않는다.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import shlex
@@ -81,8 +82,9 @@ def resolve(targets: list[dict], addr: str) -> dict:
 
 
 async def _run_local(args: list[str]) -> str:
+    cli_args = ["--json", *args] if args and args[0] == "send" else args
     proc = await asyncio.create_subprocess_exec(
-        str(ITL_PATH), *args,
+        str(ITL_PATH), *cli_args,
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
@@ -114,7 +116,8 @@ async def _run_remote(host_id: str, username: str, args: list[str]) -> str:
     except Exception as e:
         raise DeliveryFailed(f"호스트를 못 찾았다 ({host_id}): {e}") from e
 
-    quoted = " ".join(shlex.quote(a) for a in args)
+    cli_args = ["--json", *args] if args and args[0] == "send" else args
+    quoted = " ".join(shlex.quote(a) for a in cli_args)
     cmd = f"{REMOTE_PATH_PREFIX}python3 - {quoted}"
     try:
         rc, out, err = await run_remote_cmd_pooled(host, secrets, cmd,
@@ -179,9 +182,21 @@ async def deliver(username: str, addr: str, text: str, *, sender: str = "",
     else:
         out = await _run_local(args)
 
+    enter_sent: bool | None = None
+    if out.strip():
+        try:
+            receipt = json.loads(out)
+        except json.JSONDecodeError as exc:
+            raise DeliveryFailed("대상 전송 결과를 읽을 수 없다; 중복 실행 방지를 위해 재전송하지 않는다") from exc
+        if not isinstance(receipt, dict) or receipt.get("ok") is not True:
+            raise DeliveryFailed("대상이 입력 전송을 확인하지 않았다")
+        if isinstance(receipt.get("enterSent"), bool):
+            enter_sent = receipt["enterSent"]
+
     logger.info("itl deliver %s → %s (%s) by %s",
                 sender or "-", addr, target.get("kind"), username)
-    return {"ok": True, "addr": addr, "kind": target.get("kind"), "detail": out.strip()[:200]}
+    return {"ok": True, "addr": addr, "kind": target.get("kind"), "enterSent": enter_sent,
+            "detail": out.strip()[:200]}
 
 
 #: 우편함 통로는 스캐너를 안 지나므로 그쪽의 속도 제한이 없다. 서로 답하는 두 에이전트는
@@ -211,6 +226,21 @@ def _sender_rate_ok(sender_key: str, host_id: str | None, now: float | None = No
 #: (붙어 있는 팬은 양쪽으로 나간다) 같은 것을 두 번 꽂지 않기 위한 것.
 _delivered: OrderedDict[tuple[str, str, str], None] = OrderedDict()
 DELIVERED_MAX = 512
+REQUEST_ID_RE = re.compile(r"^[0-9a-f]{8,32}$")
+
+
+async def _record_delivery(username: str, sender_key: str, host_id: str | None, receipt: dict) -> None:
+    request_id = receipt.get("requestId") or ""
+    if not REQUEST_ID_RE.fullmatch(request_id):
+        return
+    args = ["record-receipt", sender_key, request_id, json.dumps(receipt, ensure_ascii=False)]
+    try:
+        if host_id:
+            await _run_remote(host_id, username, args)
+        else:
+            await _run_local(args)
+    except DeliveryFailed as exc:
+        logger.warning("itl 결과 기록 실패 (%s/%s): %s", sender_key, request_id, exc)
 
 
 def _already_delivered(sender_key: str, nonce: str | None, host_id: str | None = None) -> bool:
@@ -288,30 +318,50 @@ async def deliver_from_pane(username: str, sender_key: str, msg: dict, *,
     """
     if _already_delivered(sender_key, msg.get("n"), host_id):
         return                            # 다른 통로가 먼저 배달했다
+    request_id = msg.get("n") if msg.get("receipt") is True else None
     if not _sender_rate_ok(sender_key, host_id):
         # ⚠️ 조용하지 않게. 고리에 빠진 팬은 로그에서만 보인다.
         logger.warning("itl 발신 속도 제한 (%s/%s): >%d/%ss",
                        host_id or "local", sender_key, RATE_MAX_SENDS, RATE_WINDOW_SEC)
+        await _record_delivery(username, sender_key, host_id, {
+            "ok": False, "requestId": request_id, "delivery": "failed", "error": "발신 속도 제한",
+        })
         return
     try:
         targets = await _targets_for(username)
     except Exception as e:
         logger.warning("itl 주소록을 못 읽었다: %s", e)
+        await _record_delivery(username, sender_key, host_id, {
+            "ok": False, "requestId": request_id, "delivery": "failed", "error": "주소록 조회 실패",
+        })
         return
 
     sender = sender_addr(targets, sender_key, host_id)
     try:
-        await deliver(username, msg["to"], msg["text"], sender=sender)
-        await _ack_ok(username, sender, msg.get("to", ""))
+        result = await deliver(username, msg["to"], msg["text"], sender=sender,
+                               submit=msg.get("submit") is not False)
+        await _record_delivery(username, sender_key, host_id, {
+            "ok": result.get("enterSent") is not None, "requestId": request_id, "addr": msg["to"],
+            "delivery": ("enter-sent" if result.get("enterSent") else "typed")
+                        if result.get("enterSent") is not None else "unknown",
+            "enterSent": result.get("enterSent"),
+        })
+        await _ack_ok(username, sender, msg.get("to", ""), enter_sent=result.get("enterSent"))
     except DeliveryFailed as e:
         # 조용히 성공한 척하지 않는다 — 보낸 에이전트는 상대가 받았다고 믿는다.
         logger.warning("itl 배달 실패 (%s → %s): %s", sender or "-", msg.get("to"), e)
+        await _record_delivery(username, sender_key, host_id, {
+            "ok": False, "requestId": request_id, "delivery": "failed", "error": str(e),
+        })
         await _ack_failure(username, sender, msg.get("to", ""), str(e))
     except Exception as e:  # noqa: BLE001 — 한 번의 배달 실패가 브리지를 죽이면 안 된다
         logger.warning("itl 배달 예외 (%s → %s): %s", sender or "-", msg.get("to"), e)
+        await _record_delivery(username, sender_key, host_id, {
+            "ok": False, "requestId": request_id, "delivery": "unknown", "error": "전달 결과 확인 실패",
+        })
 
 
-async def _ack_ok(username: str, sender: str, to: str) -> None:
+async def _ack_ok(username: str, sender: str, to: str, *, enter_sent: bool | None = None) -> None:
     """보낸 팬에게 **전달됐다고** 알린다.
 
     ⚠️ 이게 없으면 침묵이 두 가지를 뜻한다: 잘 갔거나, 표식이 아예 안 주워졌거나.
@@ -325,7 +375,12 @@ async def _ack_ok(username: str, sender: str, to: str) -> None:
     if not ADDR_RE.match((sender or "").strip()) or not ADDR_RE.match((to or "").strip()):
         return
     try:
-        await notify(username, sender, f"[itl] {to} 로 전달됨")
+        status = "엔터 여부 확인 불가"
+        if enter_sent is True:
+            status = "엔터 전송됨"
+        elif enter_sent is False:
+            status = "엔터 생략됨 (입력만 전달)"
+        await notify(username, sender, f"[itl] {to} 로 전달됨 · {status}")
     except Exception as e:  # noqa: BLE001 — 통지 실패가 배달 성공을 뒤집지는 않는다
         logger.info("itl 성공 통지 실패 (%s): %s", sender, e)
 

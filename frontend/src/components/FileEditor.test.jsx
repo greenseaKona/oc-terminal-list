@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import FileEditor from './FileEditor';
 import themes from '../styles/themes';
 
 // value 를 실제로 그린다 — 그래야 "에디터가 열렸는데 비어 있다" 를 테스트가 볼 수 있다.
 vi.mock('@monaco-editor/react', () => ({
   __esModule: true,
-  default: ({ value }) => <div data-testid="monaco-editor">{value}</div>,
+  default: ({ value, onChange }) => <div data-testid="monaco-editor">
+    {value}
+    <input aria-label="editor-input" value={value || ''} onChange={(event) => onChange(event.target.value)} />
+  </div>,
   DiffEditor: () => <div data-testid="monaco-diff-editor" />,
   loader: { config: () => {} },
 }));
@@ -46,6 +49,55 @@ describe('FileEditor', () => {
 
   afterEach(() => {
     global.fetch = originalFetch;
+  });
+
+  it.each(['a.txt', 'remote:h1:/home/u/a.txt'])('keeps edits made while saving %s dirty', async (fileKey) => {
+    let finishSave;
+    global.fetch = vi.fn((url, options) => {
+      if (options?.method === 'POST') {
+        return new Promise((resolve) => { finishSave = resolve; });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ content: 'original', revision: 'rev-1' }) });
+    });
+    render(<FileEditor activeFile={fileKey} openFiles={[fileKey]} onFileSelect={vi.fn()} onClose={vi.fn()} theme={themes.catppuccin} />);
+    await screen.findByText('original');
+    fireEvent.change(screen.getByLabelText('editor-input'), { target: { value: 'sent' } });
+    fireEvent.click(screen.getByRole('button', { name: 'save' }));
+    fireEvent.change(screen.getByLabelText('editor-input'), { target: { value: 'newer edit' } });
+    await act(async () => { finishSave({ ok: true, json: async () => ({ revision: 'rev-2' }) }); });
+    expect(screen.getByLabelText('editor-input')).toHaveValue('newer edit');
+    expect(screen.getByRole('button', { name: 'save' })).toBeEnabled();
+  });
+
+  it.each(['a.txt', 'remote:h1:/home/u/a.txt'])('sends and advances the file revision for %s', async (fileKey) => {
+    global.fetch = vi.fn((url, options) => Promise.resolve({
+      ok: true,
+      json: async () => options?.method === 'POST' ? { revision: 'rev-2' } : { content: 'original', revision: 'rev-1' },
+    }));
+    render(<FileEditor activeFile={fileKey} openFiles={[fileKey]} onFileSelect={vi.fn()} onClose={vi.fn()} theme={themes.catppuccin} />);
+    await screen.findByText('original');
+    fireEvent.change(screen.getByLabelText('editor-input'), { target: { value: 'first' } });
+    fireEvent.click(screen.getByRole('button', { name: 'save' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'save' })).toBeDisabled());
+    const firstWrite = global.fetch.mock.calls.find(([, options]) => options?.method === 'POST');
+    expect(JSON.parse(firstWrite[1].body).expectedRevision).toBe('rev-1');
+    fireEvent.change(screen.getByLabelText('editor-input'), { target: { value: 'second' } });
+    fireEvent.click(screen.getByRole('button', { name: 'save' }));
+    const writes = global.fetch.mock.calls.filter(([, options]) => options?.method === 'POST');
+    expect(JSON.parse(writes[1][1].body).expectedRevision).toBe('rev-2');
+  });
+
+  it('preserves edits and permits retry after a revision conflict', async () => {
+    global.fetch = vi.fn((url, options) => Promise.resolve(options?.method === 'POST'
+      ? { ok: false, status: 409, json: async () => ({ detail: '파일이 변경되었습니다' }) }
+      : { ok: true, json: async () => ({ content: 'original', revision: 'rev-1' }) }));
+    render(<FileEditor activeFile="a.txt" openFiles={['a.txt']} onFileSelect={vi.fn()} onClose={vi.fn()} theme={themes.catppuccin} />);
+    await screen.findByText('original');
+    fireEvent.change(screen.getByLabelText('editor-input'), { target: { value: 'my edit' } });
+    fireEvent.click(screen.getByRole('button', { name: 'save' }));
+    expect(await screen.findByText('파일이 변경되었습니다')).toBeTruthy();
+    expect(screen.getByLabelText('editor-input')).toHaveValue('my edit');
+    expect(screen.getByRole('button', { name: 'save' })).toBeEnabled();
   });
 
   it('uses glass styling for the editor shell', () => {

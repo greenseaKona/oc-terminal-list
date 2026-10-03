@@ -47,6 +47,7 @@ vi.mock('./terminal/terminalHelpers', async (importOriginal) => ({
 import TerminalComponent from './Terminal';
 import { issueWsTicket } from './terminal/terminalHelpers';
 import { measureTerminalFit } from '../utils/terminalFit';
+import { readLocalCommands } from '../utils/commandHistory';
 import { harness, FakeWebSocket, testSettings } from '../test/xtermHarness';
 
 const renderTerminal = (props = {}) => render(
@@ -91,6 +92,30 @@ describe('Terminal', () => {
   });
 
   describe('연결', () => {
+    it('mobile view mode blocks focus and all input while preserving the connection and output', async () => {
+      const props = { sessionId: 'sess-1', isMobile: true, paneMultiplexer: 'none',
+        settings: { ...testSettings(), mobileViewOnly: true } };
+      const view = renderTerminal(props);
+      const ws = await openSocket();
+      const term = harness.term;
+      expect(term.options.disableStdin).toBe(true);
+      expect(term.focus).not.toHaveBeenCalled();
+      fireEvent.click(view.getByTestId('terminal-touch-overlay'));
+      act(() => term.handlers.data('unwanted'));
+      expect(window.terminalSessions['sess-1'].sendCommand('unwanted')).toBe(false);
+      expect(ws.sent).not.toContain('unwanted');
+      expect(term.focus).not.toHaveBeenCalled();
+      act(() => ws.serverSendBytes('visible output'));
+      await waitFor(() => expect(term.written.length).toBeGreaterThan(0));
+      const sockets = harness.sockets.length;
+      view.rerender(<TerminalComponent {...props} settings={{ ...props.settings, mobileViewOnly: false }} />);
+      expect(term.options.disableStdin).toBe(false);
+      fireEvent.click(view.getByTestId('terminal-touch-overlay'));
+      expect(term.focus).toHaveBeenCalled();
+      act(() => term.handlers.data('allowed'));
+      await waitFor(() => expect(ws.sent).toContain('allowed'));
+      expect(harness.sockets).toHaveLength(sockets);
+    });
     it('로컬 세션은 티켓·셸·크기를 실은 /ws/<id> 로 연결한다', async () => {
       renderTerminal({ sessionId: 'abc' });
       const ws = await waitForSocket();
@@ -183,6 +208,12 @@ describe('Terminal', () => {
   });
 
   describe('상태 오버레이', () => {
+    it('보이지 않는 모바일 pane 에서는 로딩 애니메이션을 돌리지 않는다', () => {
+      const { container } = renderTerminal({ isMobile: true, isActive: false });
+
+      expect(container.querySelectorAll('[style*="term-skeleton-pulse"]')).toHaveLength(0);
+    });
+
     it('takeover(detached 토큰) 시 "다른 기기에서 접속 중" 을 띄운다', async () => {
       renderTerminal();
       const ws = await openSocket();
@@ -290,8 +321,42 @@ describe('Terminal', () => {
   });
 
   describe('입력', () => {
+    it('실제 멀티플렉서가 tmux일 때만 alternate buffer 기록을 조회한다', async () => {
+      global.fetch = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ available: true, history: 50, offset: 0, rows: 24 }),
+      }));
+      renderTerminal({
+        paneMultiplexer: 'none',
+        settings: testSettings({ showTerminalScrollbar: true }),
+      });
+      const ws = await openSocket();
+      harness.term.buffer.active.type = 'alternate';
+
+      act(() => { harness.term.handlers.scroll(); });
+      expect(global.fetch.mock.calls.some(([url]) => String(url).startsWith('/api/terminal-scroll'))).toBe(false);
+
+      await act(async () => {
+        ws.serverSend(JSON.stringify({ type: 'session-meta', multiplexer: 'tmux' }));
+      });
+      await waitFor(() => expect(
+        global.fetch.mock.calls.some(([url]) => String(url).startsWith('/api/terminal-scroll')),
+      ).toBe(true));
+    });
+
+    it('긴 원시 터미널 입력도 최근 명령에 저장하지 않는다', async () => {
+      renderTerminal({ sessionId: 'private-input' });
+      await openSocket();
+      const secret = 'correct-horse-battery-staple';
+
+      await act(async () => { harness.term.handlers.data(secret); });
+
+      expect(readLocalCommands('private-input')).toEqual([]);
+    });
+
     it('keeps the viewed question when newer keyboard and quick-input submissions arrive', async () => {
-      renderTerminal({ settings: { ...testSettings(), showInputOnScroll: true, showTerminalScrollbar: false } });
+      renderTerminal({ paneMultiplexer: 'none',
+        settings: { ...testSettings(), showInputOnScroll: true, showTerminalScrollbar: false } });
       const ws = await openSocket();
       const term = harness.term;
       Object.assign(term.buffer.active, { baseY: 100, viewportY: 100, cursorY: 0, cursorX: 2, length: 101,
@@ -520,6 +585,19 @@ describe('Terminal', () => {
   });
 
   describe('WebGL 수명', () => {
+    it('공유 설정이 켜져 있어도 모바일에서는 WebGL 을 부착하지 않는다', async () => {
+      render(<TerminalComponent
+        sessionId="gl-mobile"
+        settings={testSettings({ useWebgl: true })}
+        isMobile
+        isActive
+        isFocused
+      />);
+      await openSocket();
+
+      expect(harness.webgls).toHaveLength(0);
+    });
+
     // 컨텍스트는 브라우저당 ~16개 한도 — 비활성 pane 이 물고 있으면 고갈되어 탭이 통째로 죽는다.
     it('활성이면 부착하고, 비활성이 되면 유예 후 반납한다', async () => {
       const props = { sessionId: 'gl', settings: testSettings({ useWebgl: true }), isFocused: true };

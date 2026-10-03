@@ -32,7 +32,8 @@ import { getLinkAtClient } from '../../utils/terminalLinkAt';
 export const isImeModeKey = (e) => {
   const key = e?.key;
   const code = e?.code;
-  return key === 'HangulMode' || key === 'Hangul' || key === 'HanjaMode' || key === 'Hanja'
+  return e?.isComposing === true
+    || key === 'HangulMode' || key === 'Hangul' || key === 'HanjaMode' || key === 'Hanja'
     || key === 'KanaMode' || key === 'Convert' || key === 'NonConvert' || key === 'Process'
     || code === 'Lang1' || code === 'Lang2'
     // Legacy numeric codes some Windows keyboards still report (21=Hangul, 25=Hanja).
@@ -46,6 +47,10 @@ const MAX_WHEEL_REPORTS = { wheel: 12, touch: 8 };
 
 const LONG_PRESS_MS = 500;         // 롱프레스 → 컨텍스트 메뉴
 const TOUCH_SCROLL_THRESHOLD_PX = 5;
+// Touch flicks arrive as raw pixel deltas at ~60Hz; mapping them 1:1 to lines
+// makes one swipe fly through history. Damp the ratio and let the existing
+// fractional-line remainder keep sub-line motion smooth.
+const TOUCH_SCROLL_DAMPING = 0.5;
 const DRAG_SELECT_THRESHOLD_PX = 5; // 이만큼 끌어야 선택으로 전환(클릭은 앱으로)
 const SELECTION_SETTLE_MS = 80;    // 드래그가 멎고 나서 한 번만 클립보드에 쓴다
 const COPY_FLASH_MS = 1800;
@@ -60,6 +65,8 @@ const attachTerminalInteractions = ({
   input,
   getSocket,
   isMobile,
+  isReadOnly = () => false,
+  scrollReadOnly = null,
   sessionId,
   // 원격 pane 이면 붙여넣은 이미지가 **그 호스트에** 올라가야 한다.
   hostId = null,
@@ -113,6 +120,13 @@ const attachTerminalInteractions = ({
     else wheelLineRemainder -= lines;
     if (lines === 0) return true;
 
+    // Browsing tmux history must not send mouse reports to the running program.
+    if (isReadOnly()) {
+      if (scrollReadOnly) scrollReadOnly(lines);
+      else if (term.buffer?.active?.type === 'normal') term.scrollLines(lines);
+      return true;
+    }
+
     if (shouldClearSelectionOnScroll({ hasSelection: term.hasSelection(), lines })) {
       try { term.clearSelection(); } catch { /* noop */ }
     }
@@ -157,7 +171,7 @@ const attachTerminalInteractions = ({
         later(() => setImagePasteState(null), IMAGE_TOAST_ERROR_MS);
       },
     });
-    if (!data) return;
+    if (!data || isReadOnly()) return;
     // ⚠️ 200 을 받은 것과 경로가 셸에 도착한 것은 다른 사건이다. 재연결 중이면 입력 큐가
     // 4초 뒤 그 항목을 버리므로(STALE_INPUT_MS), 넣을 수 있을 때까지 잠깐 기다린다.
     const inserted = await pasteWhenConnected(term, `${data.path} `, getSocket); // 뒤 공백 — 이어서 타이핑할 수 있게
@@ -173,6 +187,7 @@ const attachTerminalInteractions = ({
   };
 
   const handlePaste = (e) => {
+    if (isReadOnly()) { e.preventDefault(); e.stopPropagation(); return; }
     const cd = e.clipboardData;
     if (!cd) return;
     const imageItem = Array.from(cd.items || []).find(
@@ -221,7 +236,7 @@ const attachTerminalInteractions = ({
         return false;
       }
     }
-    return true;
+    return !isReadOnly();
   });
 
   /* ── 우클릭 메뉴 ────────────────────────────────────────────────────────
@@ -358,9 +373,12 @@ const attachTerminalInteractions = ({
   let isTouchScrolling = false;
   let longPressFired = false;
   let longPressTimer = null;
+  let touchCancelled = false;
 
   const handleTouchStart = (e) => {
-    if (e.touches.length !== 1) return;
+    clearTimeout(longPressTimer);
+    touchCancelled = e.touches.length !== 1;
+    if (touchCancelled) return;
     e.preventDefault();
     touchStartX = e.touches[0].clientX;
     touchStartY = e.touches[0].clientY;
@@ -387,7 +405,7 @@ const attachTerminalInteractions = ({
 
     e.preventDefault();
     touchStartY = e.touches[0].clientY;
-    handleScrollDelta(dy, 0, e.touches[0].clientX, e.touches[0].clientY, 'touch');
+    handleScrollDelta(dy * TOUCH_SCROLL_DAMPING, 0, e.touches[0].clientX, e.touches[0].clientY, 'touch');
   };
 
   /* 이 pane 에서 도크로 포커스를 한 번 넘겼나. attach 단위라 pane 을 새로 열면 다시
@@ -405,9 +423,14 @@ const attachTerminalInteractions = ({
 
        ⚠️ 매번 넘기면 터미널에 포커스를 줄 방법이 사라져 TUI 프롬프트에 엔터 한 번을
        못 친다(실제로 그렇게 막혔다). 도크로 돌아가려면 도크를 누르면 된다 — 늘 보인다. */
-    if (isTouchScrolling || longPressFired) return;
+    if (isReadOnly() || touchCancelled || isTouchScrolling || longPressFired) return;
     if (!handedToDock && focusCommandDock()) { handedToDock = true; return; }
     term.focus();
+  };
+
+  const handleTouchCancel = () => {
+    clearTimeout(longPressTimer);
+    touchCancelled = true;
   };
 
   const blockContextMenu = (e) => {
@@ -423,6 +446,7 @@ const attachTerminalInteractions = ({
   container.addEventListener('mousedown', handleNaturalMouseDown, true);
   container.addEventListener('touchstart', handleTouchStart, { passive: false });
   container.addEventListener('touchend', handleTouchEnd, { passive: true });
+  container.addEventListener('touchcancel', handleTouchCancel);
   document.addEventListener('mousemove', handleNaturalMouseMove, true);
   document.addEventListener('mouseup', handleNaturalMouseUp, true);
   // Bubble phase, after xterm has finished updating its selection.
@@ -434,6 +458,7 @@ const attachTerminalInteractions = ({
     overlay.addEventListener('touchstart', handleTouchStart, { passive: false });
     overlay.addEventListener('touchmove', handleTouchMove, { passive: false });
     overlay.addEventListener('touchend', handleTouchEnd, { passive: true });
+    overlay.addEventListener('touchcancel', handleTouchCancel);
   }
 
   return {
@@ -445,6 +470,7 @@ const attachTerminalInteractions = ({
       container.removeEventListener('mousedown', handleNaturalMouseDown, true);
       container.removeEventListener('touchstart', handleTouchStart);
       container.removeEventListener('touchend', handleTouchEnd);
+      container.removeEventListener('touchcancel', handleTouchCancel);
       document.removeEventListener('mousemove', handleNaturalMouseMove, true);
       document.removeEventListener('mouseup', handleNaturalMouseUp, true);
       document.removeEventListener('mouseup', handleSelectionGestureEnd);
@@ -455,6 +481,7 @@ const attachTerminalInteractions = ({
         overlay.removeEventListener('touchstart', handleTouchStart);
         overlay.removeEventListener('touchmove', handleTouchMove);
         overlay.removeEventListener('touchend', handleTouchEnd);
+        overlay.removeEventListener('touchcancel', handleTouchCancel);
       }
 
       if (selectionTimer) clearTimeout(selectionTimer);

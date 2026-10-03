@@ -24,8 +24,8 @@ const { color, font, fontSize, fontWeight, space } = tokens;
 // Info 탭은 트레이스가 아니라 스냅샷에 가깝다. 매 몇 초 갱신은 실시간 모니터링도 아닌데 부하만 키움.
 // → 탭 열려 있는 동안만 30s 마다 폴링하고, 닫으면 즉시 멈춤. 사용자가 즉시 보고 싶으면 새로고침 버튼.
 
-const InfoPanel = memo(({ info, paneThemeId, globalThemeId, t }) => {
-  const { stats, refresh: refreshStats, refreshing: statsRefreshing } = useSystemStats(true);
+const InfoPanel = memo(({ info, paneThemeId, globalThemeId, isVisible = true, t }) => {
+  const { stats, refresh: refreshStats, refreshing: statsRefreshing } = useSystemStats(isVisible);
   const themeOverridden = !!paneThemeId && !!globalThemeId && paneThemeId !== globalThemeId;
   const activeThemeId = paneThemeId || globalThemeId;
   const infoTheme = themes[activeThemeId] || themes.catppuccin;
@@ -54,6 +54,7 @@ const InfoPanel = memo(({ info, paneThemeId, globalThemeId, t }) => {
      1초 간격이면 충분 (사이즈는 자주 안 바뀜). */
   const [live, setLive] = useState({ cols: 0, rows: 0, conn: 'unknown' });
   useEffect(() => {
+    if (!isVisible) return undefined;
     const sid = info?.sessionId;
     if (!sid) return undefined;
     const tick = () => {
@@ -69,7 +70,7 @@ const InfoPanel = memo(({ info, paneThemeId, globalThemeId, t }) => {
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [info?.sessionId]);
+  }, [info?.sessionId, isVisible]);
 
   const connToneMap = {
     open:       { dot: '#a6e3a1', label: t?.('connOpen')       || 'Connected' },
@@ -152,7 +153,7 @@ const InfoPanel = memo(({ info, paneThemeId, globalThemeId, t }) => {
                 width: '7px', height: '7px', borderRadius: '50%',
                 background: connTone.dot, flexShrink: 0,
                 boxShadow: live.conn === 'open' ? `0 0 0 2px ${connTone.dot}33` : 'none',
-                animation: live.conn === 'open' ? 'iterm-info-connected-breath 1.7s ease-in-out infinite' : 'none',
+                animation: isVisible && live.conn === 'open' ? 'iterm-info-connected-breath 1.7s ease-in-out infinite' : 'none',
               }} />
               {connTone.label}
             </span>

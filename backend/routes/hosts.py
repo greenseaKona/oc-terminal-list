@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import shlex
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -281,13 +280,12 @@ async def get_host_tmux_clients(
         payload.update(_client_identity_payload("host", f"{host_id}:{session}", client_id, request))
         return payload
 
+    from host_common import force_shquote
     from host_manager import open_connection
     # Quote the whole exact tmux target. In zsh, a bare token starting with '='
     # triggers command-path expansion, so `-t =mobile-foo` can fail before tmux
     # runs. `'=mobile-foo'` works in sh/zsh and keeps tmux exact-match semantics.
-    safe_session = shlex.quote(f"={session}")
-    if safe_session.startswith("="):
-        safe_session = "'" + safe_session.replace("'", "'\"'\"'") + "'"
+    safe_session = force_shquote(f"={session}")
     # `=` prefix → exact match (suffix 매치 방지). exists 도 같이 내려 refresh-only 재연결에 사용.
     cmd = (
         f"if tmux has-session -t {safe_session} 2>/dev/null; then "
