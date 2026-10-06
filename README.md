@@ -432,7 +432,7 @@ sudo systemctl restart iterminallist.service
 | `Ctrl+Shift+S` | Snippet palette |
 | `Ctrl+P` | Quick open files |
 | `Ctrl+T` | New tab |
-| `Ctrl+W` | Close tab |
+| `Ctrl+W` | Close tab (passed to the shell while the terminal is focused) |
 | `Ctrl+1` … `Ctrl+9` | Switch to tab N |
 | `Ctrl+\` | Split right |
 | `Ctrl+Shift+\` | Split down |
@@ -462,6 +462,32 @@ shortcut keys. Tap links to open them; hold and drag (or drag horizontally) to s
 text, then tap **Copy selection**. Swipe vertically to browse history and tap **Bottom**
 to return to live output without leaving View mode. Copy all and **View as text** remain available.
 The choice is remembered in this browser and does not affect desktop terminals.
+
+### Resetting the administrator password
+
+If you forget the administrator password, reset it from an interactive server terminal.
+The old password is not required. Enter a new password of at least 8 characters twice;
+both entries are hidden. Registered passkeys and TOTP 2FA remain enabled.
+
+**Docker / GHCR**
+
+```bash
+docker compose exec app python /app/backend/reset_admin_password.py --confirm
+docker compose restart app
+```
+
+**Host-native systemd** (from the repository root)
+
+```bash
+.venv/bin/python backend/reset_admin_password.py --confirm
+sudo systemctl restart iterminallist.service
+```
+
+Existing web login sessions are revoked. Restart the backend to close existing
+authenticated connections, then sign in with the new password or a registered passkey.
+Run without `--confirm` to preview the target account without changing it.
+Use `--database /path/to/app.db` to select a different database.
+See the [operations guide](./deploy/README.md) for host maintenance details.
 
 ### Updating
 

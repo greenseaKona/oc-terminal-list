@@ -225,9 +225,10 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
       if (res.status === 409) {
         const conflict = await res.json().catch(() => null);
         if (conflict?.current) {
+          const promptedConflict = { ...conflict, prompt: true };
           workspaceAuthorityEpochRef.current += 1;
-          workspaceConflictRef.current = conflict;
-          setWorkspaceConflict(conflict);
+          workspaceConflictRef.current = promptedConflict;
+          setWorkspaceConflict(promptedConflict);
         }
         return false;
       }
@@ -326,9 +327,10 @@ export default function useWorkspaceTabs({ isAuthenticated }) {
           // until the user chooses which side of the conflict to keep.
           const conflict = await res.json().catch(() => null);
           if (conflict?.current) {
+            const deferredConflict = { ...conflict, prompt: false };
             workspaceAuthorityEpochRef.current += 1;
-            workspaceConflictRef.current = conflict;
-            setWorkspaceConflict(conflict);
+            workspaceConflictRef.current = deferredConflict;
+            setWorkspaceConflict(deferredConflict);
           }
           setKeepLocalPending(false);
         } else if (res.ok) {

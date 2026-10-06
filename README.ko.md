@@ -432,7 +432,7 @@ sudo systemctl restart iterminallist.service
 | `Ctrl+Shift+S` | 스니펫 팔레트 |
 | `Ctrl+P` | 빠른 파일 열기 |
 | `Ctrl+T` | 새 탭 |
-| `Ctrl+W` | 탭 닫기 |
+| `Ctrl+W` | 탭 닫기 (터미널 포커스에서는 셸로 전달) |
 | `Ctrl+1` … `Ctrl+9` | N번 탭으로 전환 |
 | `Ctrl+\` | 오른쪽 분할 |
 | `Ctrl+Shift+\` | 아래 분할 |
@@ -463,6 +463,32 @@ journalctl -u iterminallist.service -f
 세로로 쓸어 기록을 읽고 **맨 아래로**를 누르면 보기 모드를 유지하면서 최신 출력으로
 돌아옵니다. 전체 복사와 **텍스트로 보기**도 계속 사용할 수 있습니다.
 모드 선택은 해당 브라우저에 저장되며 데스크톱에는 적용되지 않습니다.
+
+### 관리자 비밀번호 초기화
+
+관리자 비밀번호를 잊었다면 서버의 대화형 터미널에서 재설정할 수 있습니다.
+기존 비밀번호는 필요하지 않습니다. 8자 이상의 새 비밀번호를 두 번 입력하며,
+입력 내용은 화면에 표시되지 않습니다. 등록된 패스키와 TOTP 2단계 인증은 유지됩니다.
+
+**Docker / GHCR**
+
+```bash
+docker compose exec app python /app/backend/reset_admin_password.py --confirm
+docker compose restart app
+```
+
+**호스트 네이티브 systemd** (저장소 루트에서 실행)
+
+```bash
+.venv/bin/python backend/reset_admin_password.py --confirm
+sudo systemctl restart iterminallist.service
+```
+
+기존 웹 로그인 세션은 무효화됩니다. 백엔드를 재시작해 기존 인증 연결도 종료한 뒤
+새 비밀번호 또는 등록된 패스키로 다시 로그인하세요.
+`--confirm` 없이 실행하면 변경 없이 대상 계정만 확인합니다.
+다른 DB를 사용하려면 `--database /path/to/app.db`를 지정하세요.
+호스트 관리의 자세한 내용은 [운영 가이드](./deploy/README.md)를 참고하세요.
 
 ### 업데이트
 

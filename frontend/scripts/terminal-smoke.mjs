@@ -27,7 +27,21 @@ const waitForServer = async () => {
   throw new Error(`Vite server did not start at ${BASE_URL}`);
 };
 
-const mockApi = async (page) => {
+const mockApi = async (page, { conflictOnPut = false, language = 'en' } = {}) => {
+  const serverTabState = {
+    updatedAt: 'smoke',
+    activeTabId: 'local:smoke-session',
+    tabs: [{
+      id: 'local:smoke-session',
+      type: 'local',
+      sessionId: 'smoke-session',
+      name: 'smoke',
+      panes: [{ id: 'pane-smoke', mode: 'terminal', sessionId: 'smoke-session' }],
+      layout: 'single',
+      splitTree: { type: 'pane', paneId: 'pane-smoke' },
+      activePaneId: 'pane-smoke',
+    }],
+  };
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -44,7 +58,7 @@ const mockApi = async (page) => {
       return json({
         settings: {
           theme: 'default',
-          language: 'en',
+          language,
           fontSize: 12,
           fontSizeMobile: 13,
           fontFamily: 'JetBrainsMono Nerd Font Mono',
@@ -60,21 +74,11 @@ const mockApi = async (page) => {
     if (path === '/api/sessions') return json([]);
     if (path === '/api/ws-ticket') return json({ ticket: 'smoke-ticket', ttl: 20 });
     if (path === '/api/tab-state') {
-      if (route.request().method() === 'PUT') return json({ updatedAt: 'smoke' });
-      return json({
-        updatedAt: 'smoke',
-        activeTabId: 'local:smoke-session',
-        tabs: [{
-          id: 'local:smoke-session',
-          type: 'local',
-          sessionId: 'smoke-session',
-          name: 'smoke',
-          panes: [{ id: 'pane-smoke', mode: 'terminal', sessionId: 'smoke-session' }],
-          layout: 'single',
-          splitTree: { type: 'pane', paneId: 'pane-smoke' },
-          activePaneId: 'pane-smoke',
-        }],
-      });
+      if (route.request().method() === 'PUT') {
+        if (conflictOnPut) return json({ detail: 'tab-state version mismatch', current: serverTabState }, 409);
+        return json({ updatedAt: 'smoke' });
+      }
+      return json(serverTabState);
     }
     if (path === '/api/tab-state/version') return json({ updatedAt: 'smoke' });
     if (path.endsWith('/clients')) return json({ attached: false, exists: true, count: 0 });
@@ -83,10 +87,11 @@ const mockApi = async (page) => {
   });
 };
 
-const installFakeWebSocket = async (context) => {
-  await context.addInitScript(() => {
+const installFakeWebSocket = async (context, language) => {
+  await context.addInitScript((initialLanguage) => {
     localStorage.setItem('auth_token', 'smoke-token');
     localStorage.setItem('username', 'admin');
+    localStorage.setItem('terminal_settings', JSON.stringify({ language: initialLanguage }));
 
     class FakeWebSocket extends EventTarget {
       static CONNECTING = 0;
@@ -118,10 +123,10 @@ const installFakeWebSocket = async (context) => {
     }
 
     window.WebSocket = FakeWebSocket;
-  });
+  }, language);
 };
 
-const runViewport = async (browser, name, viewport, mobile = false) => {
+const runViewport = async (browser, name, viewport, mobile = false, language = 'en') => {
   console.log(`terminal smoke: ${name}`);
   const context = await browser.newContext({
     viewport,
@@ -129,9 +134,9 @@ const runViewport = async (browser, name, viewport, mobile = false) => {
     hasTouch: mobile,
     deviceScaleFactor: mobile ? 2 : 1,
   });
-  await installFakeWebSocket(context);
+  await installFakeWebSocket(context, language);
   const page = await context.newPage();
-  await mockApi(page);
+  await mockApi(page, { conflictOnPut: !mobile, language });
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.xterm', { timeout: 15000 });
   await page.waitForFunction(() => {
@@ -191,6 +196,33 @@ const runViewport = async (browser, name, viewport, mobile = false) => {
 
   await mkdir('test-results', { recursive: true });
   await page.screenshot({ path: `test-results/terminal-smoke-${name}.png`, fullPage: true });
+  if (!mobile) {
+    const conflictResponse = page.waitForResponse((response) => (
+      response.url().endsWith('/api/tab-state')
+      && response.request().method() === 'PUT'
+      && response.status() === 409
+    ));
+    await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: '\\', code: 'Backslash', ctrlKey: true, bubbles: true, cancelable: true,
+    })));
+    await conflictResponse;
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const conflictTitleText = language === 'ko' ? '다른 기기에서 탭 구성이 변경됨' : 'Workspace changed elsewhere';
+    const conflictTitle = page.getByText(conflictTitleText, { exact: true });
+    if (await conflictTitle.count()) throw new Error('Background workspace conflict interrupted the terminal');
+    await page.screenshot({ path: `test-results/workspace-conflict-deferred-${name}.png`, fullPage: true });
+    await page.locator('.xterm-helper-textarea').focus();
+    await page.locator('.xterm-helper-textarea').dispatchEvent('keydown', {
+      key: 'w', code: 'KeyW', ctrlKey: true, bubbles: true, cancelable: true,
+    });
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    if (await conflictTitle.count()) throw new Error('Terminal Ctrl+W unexpectedly opened the workspace conflict modal');
+    await page.evaluate(() => window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'w', ctrlKey: true, bubbles: true, cancelable: true,
+    })));
+    await conflictTitle.waitFor();
+    await page.screenshot({ path: `test-results/workspace-conflict-on-close-${name}.png`, fullPage: true });
+  }
   await context.close();
 };
 
@@ -202,6 +234,7 @@ try {
   });
   await runViewport(browser, 'desktop', { width: 1365, height: 768 }, false);
   await runViewport(browser, 'mobile', { width: 390, height: 844 }, true);
+  await runViewport(browser, 'desktop-ko-narrow', { width: 390, height: 844 }, false, 'ko');
   await browser.close();
   console.log('terminal smoke: passed');
 } finally {

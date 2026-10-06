@@ -10,6 +10,7 @@ const bundle = await build({
     import React, {useEffect, useRef, useState} from 'react';
     import {createRoot} from 'react-dom/client';
     import createXtermInstance from './src/components/terminal/createXtermInstance';
+    import attachTerminalInteractions from './src/components/terminal/attachTerminalInteractions';
     import ensureStyles from './src/components/terminal/xtermGlobalCss';
     import TerminalScrollbar from './src/components/terminal/TerminalScrollbar';
     import CwdBreadcrumb from './src/components/terminalheader/CwdBreadcrumb';
@@ -38,10 +39,26 @@ const bundle = await build({
         window.scrollCalls = [];
         const scrollToLine = term.scrollToLine.bind(term);
         term.scrollToLine = line => { window.scrollCalls.push(line); scrollToLine(line); };
+        window.scrollLineCalls = [];
+        const scrollLines = term.scrollLines.bind(term);
+        term.scrollLines = lines => { window.scrollLineCalls.push(lines); scrollLines(lines); };
+        window.wheelDecisions = [];
+        const attachWheel = term.attachCustomWheelEventHandler.bind(term);
+        term.attachCustomWheelEventHandler = handler => attachWheel(event => {
+          const allowed = handler(event);
+          window.wheelDecisions.push({allowed, deltaY:event.deltaY});
+          return allowed;
+        });
+        const interactions = attachTerminalInteractions({
+          term, container: container.current, overlay: document.getElementById('mobile-overlay'),
+          input: {push() {}}, getSocket: () => null, isMobile: () => false, sessionId: 'test',
+          logger: {info() {}, warn() {}, error() {}}, setContextMenu() {}, setCopyFlash() {},
+          setImagePasteState() {},
+        });
         window.chunks = []; term.onData(data => window.chunks.push(data));
         setReady(true);
         term.write(['A', 'B', 'C'].map(letter => '\\x1b[48;2;60;64;72m› 질문 '+letter+'\\x1b[0m\\r\\n\\r\\n' + Array.from({length:70}, (_,i) => 'Answer '+letter+' '+i+'\\r\\n').join('')).join('') + '› ');
-        return () => term.dispose();
+        return () => { interactions.detach(); term.dispose(); };
       }, []);
       useEffect(() => {
         if (xtermRef.current) xtermRef.current.options.theme = theme;
@@ -103,6 +120,13 @@ for (const engine of [chromium, webkit]) {
     await page.emulateMedia({reducedMotion:'no-preference'});
     await page.mouse.move(600, 20);
     await page.waitForFunction(() => window.term?.buffer.active.baseY > 100);
+    await page.locator('.xterm').dispatchEvent('wheel', {deltaY:-8, deltaMode:0});
+    await page.locator('.xterm').dispatchEvent('wheel', {deltaY:-8, deltaMode:0});
+    await page.waitForFunction(() => window.wheelDecisions.length >= 2);
+    assert.deepEqual(await page.evaluate(() => window.wheelDecisions.slice(-2).map(item => item.allowed)), [true, true],
+      'Normal-buffer pixel wheel events stay on the native xterm path');
+    assert.deepEqual(await page.evaluate(() => window.scrollLineCalls), [],
+      'Desktop trackpad deltas are never quantized through scrollLines');
     const bar = page.getByRole('scrollbar');
     assert.equal(await bar.count(), 0, 'Scrollbar stays hidden until the user opts in');
     await page.locator('#pane').screenshot({path:'/tmp/terminal-scrollbar-default-off-'+engine.name()+'.png'});

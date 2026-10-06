@@ -96,6 +96,23 @@ describe('createOutputSink', () => {
   });
 
   describe('coalescing', () => {
+    it('flushes the first server chunk after user input immediately during a steady stream', () => {
+      const out = sink();
+      out.push(bytes('stream-1'));
+      out.push(bytes('stream-2'));
+
+      out.prioritizeNextPush();
+      out.push(bytes('echo'));
+
+      expect(term.text).toBe('stream-1stream-2echo');
+      expect(term.writes).toHaveLength(2);
+
+      out.push(bytes('stream-3'));
+      expect(term.writes).toHaveLength(2);
+      vi.advanceTimersByTime(COALESCE_FOCUSED_MS);
+      expect(term.text).toBe('stream-1stream-2echostream-3');
+    });
+
     it('folds sustained output into one write per window', () => {
       const out = sink();
       out.push(bytes('1'));           // leading edge — drawn now
