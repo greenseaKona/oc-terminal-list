@@ -244,7 +244,7 @@ describe('attachTerminalInteractions', () => {
       mount({ isMobile: () => true, isReadOnly: () => true, scrollReadOnly });
       const event = new WheelEvent('wheel', { deltaY: -120, clientX: 100, clientY: 200, cancelable: true });
       overlay.dispatchEvent(event);
-      expect(scrollReadOnly).toHaveBeenCalledWith(-6);
+      expect(scrollReadOnly).toHaveBeenCalledWith(-6, { col: 11, row: 11 });
       expect(event.defaultPrevented).toBe(true);
       expect(input.push).not.toHaveBeenCalled();
       handle.detach();

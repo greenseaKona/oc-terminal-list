@@ -770,9 +770,9 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
       getSocket: () => wsRef.current,
       isMobile: () => isMobileRef.current,
       isReadOnly: () => readOnlyRef.current,
-      scrollReadOnly: (lines) => {
+      scrollReadOnly: (lines, cell) => {
         viewHistoryTouchedRef.current = true;
-        readOnlyScrollRef.current?.(lines);
+        readOnlyScrollRef.current?.(lines, cell);
       },
       onViewFontSize: (size) => setViewFontSize((previous) => previous?.base === baseFontSizeRef.current && previous.size === size
         ? previous : { base: baseFontSizeRef.current, size }),
@@ -2249,6 +2249,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
         sessionId={hostId ? (effectiveTmuxSession || tmuxSessionName) : sessionId}
         hostId={hostId}
         enabled={readOnly || settings.showTerminalScrollbar === true}
+        readOnly={readOnly}
         scrollLinesRef={readOnlyScrollRef}
         finishViewingRef={finishViewingRef}
         onHistorySeek={markViewHistory}

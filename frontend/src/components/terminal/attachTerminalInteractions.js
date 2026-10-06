@@ -123,10 +123,13 @@ const attachTerminalInteractions = ({
     else wheelLineRemainder -= lines;
     if (lines === 0) return true;
 
-    // Browsing tmux history must not send mouse reports to the running program.
     if (isReadOnly()) {
-      if (scrollReadOnly) scrollReadOnly(lines);
-      else if (term.buffer?.active?.type === 'normal') term.scrollLines(lines);
+      if (scrollReadOnly) {
+        scrollReadOnly(Math.sign(lines) * Math.min(MAX_WHEEL_REPORTS[source] ?? 12, Math.abs(lines)),
+          cellFromClientPoint(clientX, clientY));
+      } else if (term.buffer?.active?.type === 'normal') {
+        term.scrollLines(lines);
+      }
       return true;
     }
 

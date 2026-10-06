@@ -129,6 +129,10 @@ describe('Terminal', () => {
       fireEvent.click(view.getByTestId('terminal-touch-overlay'));
       act(() => term.handlers.data('unwanted'));
       expect(window.terminalSessions['sess-1'].sendCommand('unwanted')).toBe(false);
+      act(() => window.terminalSessions['sess-1'].sendData('\x03\x1b[Z'));
+      fireEvent.paste(view.getByTestId('terminal-touch-overlay'), { clipboardData: {
+        items: [], getData: () => 'unwanted paste',
+      } });
       expect(ws.sent).not.toContain('unwanted');
       expect(term.focus).not.toHaveBeenCalled();
       act(() => ws.serverSendBytes('visible output'));
