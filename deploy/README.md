@@ -217,6 +217,22 @@ sudo systemctl start iterminallist.service
 ### 로그인 후 즉시 튕김
 JWT 키가 회전됐을 때 발생. 다시 로그인하면 서버가 HttpOnly 세션 쿠키를 재발급한다.
 
+### 관리자 비밀번호를 잊은 경우
+
+서버의 대화형 터미널에서 관리자 비밀번호를 재설정할 수 있다. 패스키로도 접속할 수
+없는 경우에 사용할 수 있으며 기존 비밀번호는 필요하지 않다. 8자 이상의 새 비밀번호는
+숨김 입력으로 두 번 받는다. 등록된 패스키와 2단계 인증은 유지된다.
+저장소 루트에서 실행한다.
+
+```bash
+.venv/bin/python backend/reset_admin_password.py --confirm
+sudo systemctl restart iterminallist.service
+```
+
+재설정 후 기존 웹 로그인 세션은 무효화된다. 백엔드 재시작으로 기존 연결도 종료한 뒤
+새 비밀번호 또는 패스키로 다시 로그인한다. tmux 셸은 서비스 재시작 후에도 유지된다.
+`--confirm` 없이 실행하면 대상 계정만 확인하며, 별도 DB는 `--database /path/to/app.db`로 지정한다.
+
 ### vault 데이터 복호화 실패 (호스트 SSH/비밀번호 안 됨)
 `data/.vault-key` 가 다른 키로 바뀌었을 가능성. 백업에서 복구하거나 영향받은 항목 재등록.
 

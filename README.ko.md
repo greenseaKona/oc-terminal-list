@@ -454,6 +454,32 @@ sudo systemctl start iterminallist.service
 journalctl -u iterminallist.service -f
 ```
 
+### 관리자 비밀번호 초기화
+
+관리자 비밀번호를 잊었다면 서버의 대화형 터미널에서 재설정할 수 있습니다.
+기존 비밀번호는 필요하지 않습니다. 8자 이상의 새 비밀번호를 두 번 입력하며,
+입력 내용은 화면에 표시되지 않습니다. 등록된 패스키와 TOTP 2단계 인증은 유지됩니다.
+
+**Docker / GHCR**
+
+```bash
+docker compose exec app python /app/backend/reset_admin_password.py --confirm
+docker compose restart app
+```
+
+**호스트 네이티브 systemd** (저장소 루트에서 실행)
+
+```bash
+.venv/bin/python backend/reset_admin_password.py --confirm
+sudo systemctl restart iterminallist.service
+```
+
+기존 웹 로그인 세션은 무효화됩니다. 백엔드를 재시작해 기존 인증 연결도 종료한 뒤
+새 비밀번호 또는 등록된 패스키로 다시 로그인하세요.
+`--confirm` 없이 실행하면 변경 없이 대상 계정만 확인합니다.
+다른 DB를 사용하려면 `--database /path/to/app.db`를 지정하세요.
+호스트 관리의 자세한 내용은 [운영 가이드](./deploy/README.md)를 참고하세요.
+
 ### 업데이트
 
 **Docker / GHCR**

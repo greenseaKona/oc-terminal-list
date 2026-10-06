@@ -454,6 +454,32 @@ sudo systemctl start iterminallist.service
 journalctl -u iterminallist.service -f
 ```
 
+### Resetting the administrator password
+
+If you forget the administrator password, reset it from an interactive server terminal.
+The old password is not required. Enter a new password of at least 8 characters twice;
+both entries are hidden. Registered passkeys and TOTP 2FA remain enabled.
+
+**Docker / GHCR**
+
+```bash
+docker compose exec app python /app/backend/reset_admin_password.py --confirm
+docker compose restart app
+```
+
+**Host-native systemd** (from the repository root)
+
+```bash
+.venv/bin/python backend/reset_admin_password.py --confirm
+sudo systemctl restart iterminallist.service
+```
+
+Existing web login sessions are revoked. Restart the backend to close existing
+authenticated connections, then sign in with the new password or a registered passkey.
+Run without `--confirm` to preview the target account without changing it.
+Use `--database /path/to/app.db` to select a different database.
+See the [operations guide](./deploy/README.md) for host maintenance details.
+
 ### Updating
 
 **Docker / GHCR**
