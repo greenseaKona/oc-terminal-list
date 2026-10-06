@@ -1603,6 +1603,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
         }
         return;
       }
+      output.prioritizeNextPush();
       // 예측 입력 — 인쇄 가능 문자면 RTT 안 기다리고 유령으로 즉시 표시(엔진 내부에서 안전 필터).
       predictiveEchoRef.current?.onInput(data);
       // 서버가 한동안 조용했는데 사용자가 타이핑하면, 입력이 실제로 닿는지 빠르게 검증.

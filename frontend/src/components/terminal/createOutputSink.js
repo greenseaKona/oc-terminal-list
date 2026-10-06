@@ -60,6 +60,7 @@ const createOutputSink = ({
   let buffer = [];
   let flushTimer = null;
   let pendingWriteBytes = 0;
+  let prioritizeNextPush = false;
   // 마지막으로 flush 를 *수행한* 시각. 창이 이미 비었는지 판정하는 기준.
   let lastFlushAt = 0;
 
@@ -142,12 +143,20 @@ const createOutputSink = ({
     /** 서버에서 온 raw ArrayBuffer 한 덩어리. 창이 비었으면 즉시, 아니면 다음 틱에 쓰인다. */
     push: (chunk) => {
       buffer.push(chunk);
+      if (prioritizeNextPush) {
+        prioritizeNextPush = false;
+        if (flushTimer) clearTimeout(flushTimer);
+        flushTimer = null;
+        flush();
+        return;
+      }
       if (flushTimer) return;
       const wait = coalesceMs() - (Date.now() - lastFlushAt);
       // 리딩엣지 — 조용하다가 온 첫 바이트는 타이머를 거치지 않고 이 자리에서 그린다.
       if (wait <= 0) { flush(); return; }
       flushTimer = setTimeout(flush, wait);
     },
+    prioritizeNextPush: () => { prioritizeNextPush = true; },
     /** 활성 복귀 시 즉시 쓰기 — 비활성 동안 쌓인 출력을 흘려보낸다. */
     flush,
     /** eviction — 이 뒤로는 아무것도 터미널에 닿으면 안 된다. */
@@ -155,6 +164,7 @@ const createOutputSink = ({
       buffer = [];
       if (flushTimer) clearTimeout(flushTimer);
       flushTimer = null;
+      prioritizeNextPush = false;
     },
     dispose: () => {
       buffer = [];
@@ -162,6 +172,7 @@ const createOutputSink = ({
       flushTimer = null;
       pendingWriteBytes = 0;
       lastFlushAt = 0;
+      prioritizeNextPush = false;
     },
   };
 };
