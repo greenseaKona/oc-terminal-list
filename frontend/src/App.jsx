@@ -710,7 +710,7 @@ function App() {
     onTertiary: acceptServerWorkspace,
   });
   useEffect(() => {
-    if (workspaceConflict) workspaceConflictModalRef.current();
+    if (workspaceConflict?.prompt) workspaceConflictModalRef.current();
   }, [workspaceConflict]);
   const [vncPickerHost, setVncPickerHost] = useState(null);
   /* 이 배포의 로컬 머신이 VNC 를 쓸 수 있는가 — 한 번만 조회해 캐시한다(훅이 모듈
@@ -888,9 +888,12 @@ function App() {
   // editor resize
   // ── keyboard shortcuts ────────────────────────────────────────────────────
   useEffect(() => {
+    const isTerminalInput = (el) => (
+      el instanceof HTMLElement && el.classList.contains('xterm-helper-textarea')
+    );
     const isForm = (el) => {
       if (!el || !(el instanceof HTMLElement)) return false;
-      if (el.classList.contains('xterm-helper-textarea')) return false;
+      if (isTerminalInput(el)) return false;
       const t = el.tagName.toLowerCase();
       return t === 'input' || t === 'textarea' || t === 'select' || el.isContentEditable;
     };
@@ -914,7 +917,8 @@ function App() {
         splitActivePane(e.shiftKey ? 'down' : 'right');
         return;
       }
-      if (ctrl && e.key === 'w') {
+      if (e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'w' && isTerminalInput(e.target)) return;
+      if (ctrl && e.key.toLowerCase() === 'w') {
         e.preventDefault();
         if (activeTabId) closeTab(activeTabId);
         return;

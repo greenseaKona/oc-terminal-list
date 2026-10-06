@@ -432,7 +432,7 @@ sudo systemctl restart iterminallist.service
 | `Ctrl+Shift+S` | Snippet palette |
 | `Ctrl+P` | Quick open files |
 | `Ctrl+T` | New tab |
-| `Ctrl+W` | Close tab |
+| `Ctrl+W` | Close tab (passed to the shell while the terminal is focused) |
 | `Ctrl+1` … `Ctrl+9` | Switch to tab N |
 | `Ctrl+\` | Split right |
 | `Ctrl+Shift+\` | Split down |

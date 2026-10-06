@@ -111,6 +111,7 @@ describe('useWorkspaceTabs 서버 동기화', () => {
     expect(calls.put).toHaveLength(1);
     expect(result.current.tabs.map((item) => item.id)).toEqual(['a']);
     expect(result.current.workspaceConflict.current.updatedAt).toBe('v1');
+    expect(result.current.workspaceConflict.prompt).toBe(true);
     expect(result.current.canTerminateSessions).toBe(false);
   });
 
@@ -146,6 +147,7 @@ describe('useWorkspaceTabs 서버 동기화', () => {
 
     expect(result.current.tabs.map((item) => item.id)).toEqual(['a', 'local']);
     expect(result.current.workspaceConflict).toBeTruthy();
+    expect(result.current.workspaceConflict.prompt).toBe(false);
     expect(result.current.canTerminateSessions).toBe(false);
   });
 

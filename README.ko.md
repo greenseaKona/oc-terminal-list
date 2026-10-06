@@ -432,7 +432,7 @@ sudo systemctl restart iterminallist.service
 | `Ctrl+Shift+S` | 스니펫 팔레트 |
 | `Ctrl+P` | 빠른 파일 열기 |
 | `Ctrl+T` | 새 탭 |
-| `Ctrl+W` | 탭 닫기 |
+| `Ctrl+W` | 탭 닫기 (터미널 포커스에서는 셸로 전달) |
 | `Ctrl+1` … `Ctrl+9` | N번 탭으로 전환 |
 | `Ctrl+\` | 오른쪽 분할 |
 | `Ctrl+Shift+\` | 아래 분할 |
