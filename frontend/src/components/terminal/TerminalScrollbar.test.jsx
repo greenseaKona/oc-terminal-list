@@ -110,6 +110,27 @@ it('reports a failed return to live output so the caller can keep input locked',
   await act(async () => { expect(await props.finishViewingRef.current()).toBe(false); });
 });
 
+it('serializes and deduplicates an explicit bottom operation behind application scrolling', async () => {
+  const next = { available: true, target: 'application', history: 0, offset: 0, rows: 20 };
+  fetch.mockResolvedValue({ ok: true, json: async () => next });
+  const { props } = setup('alternate', true, false, undefined, true);
+  await act(async () => {});
+  let release;
+  fetch.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+  act(() => props.scrollLinesRef.current(-12));
+  await waitFor(() => expect(release).toBeTypeOf('function'));
+  let finished;
+  act(() => { finished = props.finishViewingRef.current({ toBottom: true }); });
+  expect(props.finishViewingRef.current({ toBottom: true })).toBe(finished);
+  expect(fetch.mock.calls.filter(([, options]) => options.method === 'POST')).toHaveLength(1);
+  await act(async () => { release({ ok: true, json: async () => next }); expect(await finished).toBe(true); });
+  const bodies = fetch.mock.calls.filter(([, options]) => options.method === 'POST')
+    .map(([, options]) => JSON.parse(options.body));
+  expect(bodies[0].lines).toBe(-12);
+  expect(bodies[1]).toEqual({ session_id: 'session', host_id: null, include_input: false, action: 'bottom' });
+  expect(bodies).toHaveLength(2);
+});
+
 const luminance = (hex) => {
   const channels = hex.match(/[0-9a-f]{2}/gi).map((value) => parseInt(value, 16) / 255)
     .map((value) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);

@@ -85,7 +85,7 @@ const useTerminalApi = ({ refs, forwardedRef, sessionId, paneId, tabId, isReady 
   const scrollToBottom = useCallback(() => {
     if (readOnlyRef?.current) {
       xtermRef.current?.clearSelection();
-      return finishViewingRef?.current?.() ?? false;
+      return finishViewingRef?.current?.({ toBottom: true }) ?? false;
     }
     forceScrollToBottomRef.current?.();
     return true;

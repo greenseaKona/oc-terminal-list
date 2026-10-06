@@ -92,6 +92,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       pending = null;
       const offset = operation?.offset ?? null;
       const lines = operation?.lines ?? null;
+      const action = operation?.action ?? null;
       const includeInput = operation?.includeInput ?? showInputOnScroll;
       mutationInFlight = operation !== null;
       const ctl = new AbortController();
@@ -106,7 +107,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
           signal: ctl.signal,
           ...(operation === null ? {} : { body: JSON.stringify({
             session_id: sessionId, host_id: hostId || null, include_input: includeInput,
-            ...(lines === null ? { offset } : { lines, col: operation.col, row: operation.row }),
+            ...(action === 'bottom' ? { action } : lines === null ? { offset } : { lines, col: operation.col, row: operation.row }),
           }) }),
         });
         if (!res.ok) throw new Error('Scroll request failed');
@@ -124,7 +125,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
         mutationInFlight = false;
         busy = false;
         lastRead = Date.now();
-        if (offset === 0 && pending === null) finish(restored);
+        if ((offset === 0 || action === 'bottom') && pending === null) { finish(restored); }
         // Keep at most one seek in flight. Dragging replaces the queued target
         // rather than accumulating commands behind a slow SSH connection.
         if (!disposed && pending !== null) request();
@@ -166,7 +167,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
         request();
       });
     };
-    const seek = (offset, { includeInput = showInputOnScroll, defer = false } = {}) => {
+    const seek = (offset, { includeInput = showInputOnScroll, defer = false, action = null } = {}) => {
       const history = stateRef.current.history;
       const bounded = Math.max(0, Math.min(history, Math.round(offset)));
       if (bounded > 0) onHistorySeek?.();
@@ -174,7 +175,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
         scrollLocalToLine(history - bounded);
         localState();
       } else {
-        pending = { offset: bounded, includeInput };
+        pending = action === 'bottom' ? { action, includeInput } : { offset: bounded, includeInput };
         // A drag is a gesture: poll fast afterwards. A read-only refresh can
         // yield immediately, but a seek must finish before the latest target
         // starts because aborting HTTP does not cancel the server-side tmux command.
@@ -213,7 +214,7 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
         settleGesture();
       };
     }
-    if (finishViewingRef) finishViewingRef.current = () => {
+    if (finishViewingRef) { finishViewingRef.current = ({ toBottom = false } = {}) => {
       if (!usesTmux()) { term.scrollToBottom(); return Promise.resolve(true); }
       // Serialize the return behind any seek already running on the server.
       clearTimeout(gestureTimer);
@@ -221,9 +222,9 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       let resolve;
       const promise = new Promise((done) => { resolve = done; });
       finishRequest = { resolve, promise, timer: setTimeout(() => finish(false), 6500) };
-      seek(0);
+      seek(0, { action: toBottom ? 'bottom' : null, includeInput: false });
       return promise;
-    };
+    }; }
     const subscriptions = [term.onScroll(refresh), term.onWriteParsed(refresh), term.onResize(refresh),
       term.buffer.onBufferChange(refresh)];
     const gestureRoot = term.element.parentElement || term.element;
@@ -243,8 +244,8 @@ export default function TerminalScrollbar({ xtermRef, fitNowRef, sessionId, host
       actions.current = {};
       if (scrollLinesRef) scrollLinesRef.current = null;
       finish(false);
-      if (finishViewingRef) finishViewingRef.current = () => usesTmux()
-        ? restoreLiveOutput(sessionId, hostId) : true;
+      if (finishViewingRef) { finishViewingRef.current = (options) => usesTmux()
+        ? restoreLiveOutput(sessionId, hostId, options) : true; }
       clearTimeout(timer);
       clearTimeout(gestureTimer);
       if (requestFrame !== null) cancelAnimationFrame(requestFrame);

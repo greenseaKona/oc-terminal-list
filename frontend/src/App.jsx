@@ -812,13 +812,14 @@ function App() {
   const [commandInputOpen, setCommandInputOpen] = useState(false);
   const [inputModePending, setInputModePending] = useState(false);
   const inputModePendingRef = useRef(false);
-  const enableMobileInput = useEvent(async (openComposer = false) => {
+  const enableMobileInput = useEvent(async (openComposer = false, returnToBottomKey = null) => {
     if (inputModePendingRef.current) { return false; }
     inputModePendingRef.current = true;
     setInputModePending(true);
     try {
-      const results = await Promise.all(Object.values(window.terminalSessions || {})
-        .map(session => session.prepareInputMode?.() ?? true));
+      const results = await Promise.all(Object.entries(window.terminalSessions || {})
+        .map(([key, session]) => key === returnToBottomKey
+          ? session.scrollToBottom?.() ?? false : session.prepareInputMode?.() ?? true));
       if (results.some(result => !result)) throw new Error('Cannot leave terminal history');
       setMobileViewOnly(false);
       if (openComposer) setCommandInputOpen(true);
@@ -1614,6 +1615,8 @@ function App() {
                 Promise.resolve(session.scrollToBottom?.()).then((ok) => {
                   if (ok === false) setNotification({ isOpen: true, message: t('mobileBottomError'), type: 'error' });
                 }).catch(() => setNotification({ isOpen: true, message: t('mobileBottomError'), type: 'error' }));
+              } else if (type === 'escapeToInput') {
+                enableMobileInput(false, terminalKey);
               }
             }}
             language={settings.language}

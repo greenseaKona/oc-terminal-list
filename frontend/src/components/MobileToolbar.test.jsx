@@ -16,6 +16,8 @@ describe('MobileToolbar quick input', () => {
     expect(onAction).toHaveBeenCalledWith('copy');
     fireEvent.click(screen.getByTitle('Scroll to Bottom'));
     expect(onAction).toHaveBeenCalledWith('scrollToBottom');
+    fireEvent.click(screen.getByRole('button', { name: 'Return to the bottom with Esc and switch to input mode' }));
+    expect(onAction).toHaveBeenCalledWith('escapeToInput');
     expect(screen.getByRole('button', { name: 'Switch to input mode' }).querySelector('svg')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Switch to input mode' }));
     expect(onToggle).toHaveBeenCalledOnce();

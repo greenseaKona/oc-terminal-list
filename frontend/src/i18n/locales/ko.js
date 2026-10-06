@@ -459,6 +459,8 @@ export const ko = {
     mobileSelectGesture: '길게 누른 뒤 드래그하여 선택',
     mobileSelectionHint: '내용을 길게 누른 뒤 드래그하면 선택할 수 있습니다. 선택한 다음 복사를 눌러 주세요.',
     mobileBottom: '맨 아래로',
+    mobileEscapeToInput: 'Esc · 입력',
+    mobileEscapeToInputHint: 'Esc로 맨 아래로 이동하고 입력 모드로 전환',
     mobileBottomError: '맨 아래로 이동하지 못했습니다. 연결을 확인한 뒤 다시 눌러 주세요.',
     pageUp: '페이지 업',
     pageDown: '페이지 다운',

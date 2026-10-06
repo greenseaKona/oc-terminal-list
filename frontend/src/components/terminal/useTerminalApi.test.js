@@ -87,6 +87,7 @@ describe('useTerminalApi', () => {
     const hook = renderHook(() => useTerminalApi({ refs, sessionId: 'view', isReady: true }));
     expect(await api('view').scrollToBottom()).toBe(true);
     expect(restore).toHaveBeenCalledOnce();
+    expect(restore).toHaveBeenCalledWith({ toBottom: true });
     expect(scrollToBottom).not.toHaveBeenCalled();
     expect(refs.readOnlyRef.current).toBe(true);
     expect(api('view').sendData('x')).toBe(false);

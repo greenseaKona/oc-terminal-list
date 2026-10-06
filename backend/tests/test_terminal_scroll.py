@@ -59,6 +59,15 @@ class ScrollHistoryTest(unittest.TestCase):
                 self.assertEqual(self.state(offset)["offset"], offset)
         self.assertEqual(self.run_tmux("display-message", "-p", "-t", "=history:", "#{pane_in_mode}").strip(), "0")
 
+    def test_explicit_bottom_leaves_copy_mode_for_a_shell(self):
+        self.state(40)
+        output = subprocess.check_output(
+            ["sh", "-c", scroll_script(self.base, "history", action="bottom")],
+            env=self.env, text=True, timeout=3,
+        )
+        self.assertEqual(parse_state(output)["offset"], 0)
+        self.assertEqual(self.run_tmux("display-message", "-p", "-t", "=history:", "#{pane_in_mode}").strip(), "0")
+
     def test_seek_is_clamped_to_existing_history(self):
         state = self.state(1_000_000)
         self.assertEqual(state["offset"], state["history"])
@@ -178,6 +187,43 @@ while True:
         self.state(lines=2, col=9999, row=9999)
         self.assert_received(b"\x1b[<64;7;8M" * 3 + b"\x1b[<65;80;20M" * 2)
 
+    def test_explicit_bottom_delivers_one_escape(self):
+        self.start("sgr")
+        self.state(action="bottom")
+        self.assert_received(b"\x1b")
+
+    def test_input_mode_restore_does_not_deliver_escape(self):
+        self.start("sgr")
+        self.state(offset=0)
+        time.sleep(0.1)
+        self.assertFalse(os.path.exists(self.receipt))
+
+    def test_bottom_leaves_copy_mode_before_delivering_escape(self):
+        self.start("sgr")
+        subprocess.check_call([*self.base, "copy-mode", "-t", "=app:"], env=self.env)
+        self.assertEqual(self.state()["target"], "history")
+        self.assertEqual(self.state(action="bottom")["target"], "application")
+        self.assert_received(b"\x1b")
+
+    def test_bottom_does_not_send_escape_after_mouse_is_disabled(self):
+        self.start("sgr")
+        pid = subprocess.check_output([*self.base, "display-message", "-p", "-t", "=app:", "#{pane_pid}"],
+                                      env=self.env, text=True).strip()
+        script = scroll_script(self.base, "app", action="bottom")
+        command = f'  {shlex.join(self.base)} if-shell'
+        script = script.replace(command, f'kill -USR1 {int(pid)}; sleep 0.1\n' + command)
+        output = subprocess.check_output(["sh", "-c", script], env=self.env, text=True, timeout=3)
+        self.assertEqual(parse_state(output)["target"], "history")
+        self.assertFalse(os.path.exists(self.receipt))
+
+    def test_other_tmux_menu_rejects_bottom_without_escape(self):
+        self.start("sgr")
+        subprocess.check_call([*self.base, "choose-tree", "-t", "=app:"], env=self.env)
+        result = subprocess.run(["sh", "-c", scroll_script(self.base, "app", action="bottom")],
+                                env=self.env, capture_output=True, timeout=3)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(os.path.exists(self.receipt))
+
     def test_legacy_mouse_protocol_receives_only_wheel_bytes(self):
         self.start("legacy")
         self.state(lines=-2, col=7, row=8)
@@ -227,6 +273,14 @@ while True:
 
 
 class ScrollRequestTest(unittest.TestCase):
+    def test_explicit_bottom_is_a_fixed_operation(self):
+        request = ScrollRequest(session_id="session", action="bottom")
+        self.assertEqual(request.action, "bottom")
+        for operation in ({"action": "Escape"}, {"action": "bottom", "offset": 0},
+                          {"action": "bottom", "lines": -1}, {"action": "bottom", "text": "command"}):
+            with self.subTest(operation=operation), self.assertRaises(ValidationError):
+                ScrollRequest(session_id="session", **operation)
+
     def test_rejects_arbitrary_input_and_invalid_operations(self):
         for operation in ({}, {"offset": 0, "lines": -1}, {"lines": 0}, {"lines": 49},
                           {"lines": -49}, {"lines": -1, "col": 0}, {"lines": -1, "row": 10001},
@@ -274,6 +328,24 @@ class ScrollAuthorizationTest(unittest.IsolatedAsyncioTestCase):
                 await scroll_terminal("me", "session", None, lines=-12)
             self.assertEqual(error.exception.status_code, 404)
             spawn.assert_not_called()
+
+    async def test_foreign_owner_cannot_deliver_bottom_escape(self):
+        with (patch("routes.terminal_scroll.storage.get_session_owner", AsyncMock(return_value="other")),
+              patch("routes.terminal_scroll.asyncio.create_subprocess_exec") as spawn):
+            with self.assertRaises(HTTPException) as error:
+                await scroll_terminal("me", "session", None, action="bottom")
+            self.assertEqual(error.exception.status_code, 404)
+            spawn.assert_not_called()
+
+    async def test_remote_bottom_uses_the_owned_host_and_fixed_escape(self):
+        with (patch("routes.terminal_scroll.resolve_host_with_secrets",
+                    AsyncMock(return_value=({"id": "h"}, {}))) as resolve,
+              patch("routes.terminal_scroll.run_remote_cmd_pooled",
+                    AsyncMock(return_value=(0, "%1|0|0|24||1|1|80|0", ""))) as run):
+            await scroll_terminal("me", "app", "h", action="bottom")
+            resolve.assert_awaited_once_with("h", "me")
+            self.assertIn('"send-keys -t $pane -H 1b"', run.call_args.args[2])
+            self.assertIn("if-shell -F", run.call_args.args[2])
 
     async def test_remote_wheel_uses_the_owned_host_and_same_guarded_script(self):
         with (patch("routes.terminal_scroll.resolve_host_with_secrets",

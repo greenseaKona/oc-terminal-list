@@ -456,6 +456,8 @@ export const en = {
     mobileSelectGesture: 'Hold and drag to select',
     mobileSelectionHint: 'Touch and hold the text, then drag to select it. Tap Copy after selecting.',
     mobileBottom: 'Bottom',
+    mobileEscapeToInput: 'Esc · Input',
+    mobileEscapeToInputHint: 'Return to the bottom with Esc and switch to input mode',
     mobileBottomError: 'Could not scroll to the bottom. Check the connection and try again.',
     pageUp: 'Page up',
     pageDown: 'Page down',

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import shlex
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -25,20 +26,25 @@ class ScrollRequest(BaseModel):
     host_id: str | None = None
     offset: int | None = Field(default=None, ge=0, le=10_000_000)
     lines: int | None = Field(default=None, ge=-48, le=48)
+    action: Literal["bottom"] | None = None
     col: int = Field(default=1, ge=1, le=10_000)
     row: int = Field(default=1, ge=1, le=10_000)
     include_input: bool = False
 
     @model_validator(mode="after")
     def validate_operation(self):
-        if (self.offset is None) == (self.lines is None) or self.lines == 0:
-            raise ValueError("Provide an offset or nonzero relative lines")
+        if sum(value is not None for value in (self.offset, self.lines, self.action)) != 1 or self.lines == 0:
+            raise ValueError("Provide an offset, nonzero relative lines or bottom action")
         return self
 
 
 def scroll_script(base: list[str], session: str, offset: int | None = None, include_input: bool = False,
-                  lines: int | None = None, col: int = 1, row: int = 1) -> str:
+                  lines: int | None = None, col: int = 1, row: int = 1, action: str | None = None) -> str:
     """Resolve the active pane once, then use that exact pane for every operation."""
+    if action is not None:
+        if action != "bottom" or offset is not None or lines is not None:
+            raise ValueError("Invalid bottom operation")
+        offset = 0
     tmux = shlex.join(base)
     target = force_shquote(f"={session}:")
     script = f'state=$({tmux} display-message -p -t {target} {shlex.quote(FORMAT)}) || exit 1\n'
@@ -99,6 +105,10 @@ def scroll_script(base: list[str], session: str, offset: int | None = None, incl
         script += 'else\n'
         script += f'  state=$(run_seek {queue}send-keys -t "$pane" -X -N "$count" scroll-up{final}) || exit 1\n'
         script += 'fi\nfi\n'
+    if action == "bottom":
+        script += f'  {tmux} if-shell -F -t "$pane" \'#{{&&:#{{==:#{{pane_mode}},}},#{{mouse_any_flag}}}}\''
+        script += ' "send-keys -t $pane -H 1b" || exit 1\n'
+        script += f'state=$({tmux} display-message -p -t "$pane" {shlex.quote(FORMAT)}) || exit 1\n'
     script += 'printf "%s\\n" "$state"'
     if include_input:
         # Read only while browsing history, and reuse the same owned pane.
@@ -187,11 +197,12 @@ def parse_state(output: str, include_input: bool = False) -> dict:
 
 
 async def scroll_terminal(username: str, session: str, host_id: str | None, offset: int | None = None,
-                          include_input: bool = False, lines: int | None = None, col: int = 1, row: int = 1):
+                          include_input: bool = False, lines: int | None = None, col: int = 1, row: int = 1,
+                          action: str | None = None):
     if host_id:
         host, secrets = await resolve_host_with_secrets(host_id, username)
         command = 'export PATH="$HOME/.local/bin:$PATH"; ' + scroll_script(
-            ["tmux"], session, offset, include_input, lines, col, row)
+            ["tmux"], session, offset, include_input, lines, col, row, action)
         try:
             rc, out, _ = await run_remote_cmd_pooled(host, secrets, command, timeout=5)
         except Exception as exc:
@@ -205,7 +216,7 @@ async def scroll_terminal(username: str, session: str, host_id: str | None, offs
         proc = await asyncio.create_subprocess_exec(
             "sh",
             "-c",
-            scroll_script(tmux_manager._base_args(), session, offset, include_input, lines, col, row),
+            scroll_script(tmux_manager._base_args(), session, offset, include_input, lines, col, row, action),
             env=tmux_manager._tmux_env(),
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
@@ -221,7 +232,7 @@ async def scroll_terminal(username: str, session: str, host_id: str | None, offs
                 await proc.wait()
         rc, out = proc.returncode, stdout.decode("utf-8", errors="replace")
     if rc != 0:
-        if offset is not None or lines is not None:
+        if offset is not None or lines is not None or action is not None:
             raise HTTPException(409, "지금은 터미널 기록을 스크롤할 수 없습니다")
         return {"available": False}
     return parse_state(out, include_input)
@@ -243,4 +254,4 @@ async def get_scroll(
 async def set_scroll(request: ScrollRequest, response: Response, username: str = Depends(verify_auth_token)):
     response.headers["Cache-Control"] = "no-store"
     return await scroll_terminal(username, request.session_id, request.host_id, request.offset, request.include_input,
-                                 request.lines, request.col, request.row)
+                                 request.lines, request.col, request.row, request.action)
