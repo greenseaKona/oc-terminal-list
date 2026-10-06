@@ -87,6 +87,10 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
   const terminalRef = useRef(null);
   const touchOverlayRef = useRef(null);
   const xtermRef = useRef(null);
+  const [viewFontSize, setViewFontSize] = useState(null);
+  const baseFontSizeRef = useRef(settings.fontSize);
+  baseFontSizeRef.current = settings.fontSize;
+  const effectiveFontSize = isMobile && viewFontSize?.base === settings.fontSize ? viewFontSize.size : settings.fontSize;
   const readOnly = isMobile && settings.mobileViewOnly === true;
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
@@ -686,7 +690,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
     // xterm + 애드온 한 벌 생성 후 컨테이너에 부착. 배선은 아래에서.
     const { term, fitAddon, searchAddon, predictiveEcho } = createXtermInstance({
       container: terminalRef.current,
-      settings,
+      settings: { ...settings, fontSize: effectiveFontSize },
       theme: currentTheme,
       paneId,
       sessionId,
@@ -770,6 +774,8 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
         viewHistoryTouchedRef.current = true;
         readOnlyScrollRef.current?.(lines);
       },
+      onViewFontSize: (size) => setViewFontSize((previous) => previous?.base === baseFontSizeRef.current && previous.size === size
+        ? previous : { base: baseFontSizeRef.current, size }),
       onFileLinkClick: hostId ? null : (link) => {
         window.dispatchEvent(new CustomEvent('iterm:open-file', { detail: { ...link, cwd } }));
       },
@@ -1773,7 +1779,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
   useEffect(() => {
     if (xtermRef.current) {
       xtermRef.current.options.theme = currentTheme;
-      xtermRef.current.options.fontSize = settings.fontSize;
+      xtermRef.current.options.fontSize = effectiveFontSize;
       xtermRef.current.options.fontFamily = normalizeTerminalFontFamily(settings.fontFamily);
       xtermRef.current.options.smoothScrollDuration = settings.smoothScroll ? 100 : 0;
       xtermRef.current.options.minimumContrastRatio = resolveContrast(settings.terminalContrast);
@@ -1803,7 +1809,7 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
         }
       }, 50); // 200ms 는 너무 길어 반응이 느려 보이므로 50ms 로 단축
     }
-  }, [currentTheme, settings.fontSize, settings.fontFamily, settings.smoothScroll, settings.einkMode]);
+  }, [currentTheme, effectiveFontSize, settings.fontFamily, settings.smoothScroll, settings.einkMode]);
 
   // 예측 입력 on/off 설정 동기화.
   useEffect(() => {

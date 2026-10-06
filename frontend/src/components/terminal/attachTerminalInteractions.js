@@ -9,7 +9,7 @@ import {
 import { copyTextToClipboard, uploadImageAndGetPath, pasteWhenConnected, reportClientError } from './terminalHelpers';
 import { uploadWithRetry } from './uploadRetry';
 import { getLinkAtClient } from '../../utils/terminalLinkAt';
-import attachMobileViewSelection from './attachMobileViewSelection';
+import attachMobileViewSelection, { clampViewFontSize } from './attachMobileViewSelection';
 
 /**
  * 터미널의 포인터/키보드 배선 — 휠·터치 스크롤 라우팅, 자연스러운 마우스 선택,
@@ -68,6 +68,7 @@ const attachTerminalInteractions = ({
   isMobile,
   isReadOnly = () => false,
   scrollReadOnly = null,
+  onViewFontSize = null,
   onFileLinkClick = null,
   sessionId,
   // 원격 pane 이면 붙여넣은 이미지가 **그 호스트에** 올라가야 한다.
@@ -149,6 +150,16 @@ const attachTerminalInteractions = ({
     handleScrollDelta(e.deltaY, e.deltaMode, e.clientX, e.clientY, 'wheel');
     return false;
   });
+
+  const handleOverlayWheel = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (isReadOnly() && event.ctrlKey && onViewFontSize) {
+      onViewFontSize(clampViewFontSize(term.options.fontSize + (event.deltaY < 0 ? 1 : event.deltaY > 0 ? -1 : 0)));
+      return;
+    }
+    handleScrollDelta(event.deltaY, event.deltaMode, event.clientX, event.clientY, 'wheel');
+  };
 
   /* ── 붙여넣기 ───────────────────────────────────────────────────────────
      ClipboardEvent.clipboardData 를 쓰므로 clipboard-read 권한이 필요 없다.
@@ -458,6 +469,7 @@ const attachTerminalInteractions = ({
   document.addEventListener('keyup', handleSelectionGestureEnd);
 
   if (overlay) {
+    overlay.addEventListener('wheel', handleOverlayWheel, { passive: false });
     overlay.addEventListener('contextmenu', blockContextMenu);
     overlay.addEventListener('touchstart', handleTouchStart, { passive: false });
     overlay.addEventListener('touchmove', handleTouchMove, { passive: false });
@@ -465,7 +477,7 @@ const attachTerminalInteractions = ({
     overlay.addEventListener('touchcancel', handleTouchCancel);
   }
 
-  const viewSelection = attachMobileViewSelection({ term, overlay, isReadOnly, setContextMenu, onFileLinkClick,
+  const viewSelection = attachMobileViewSelection({ term, overlay, isReadOnly, setContextMenu, onFileLinkClick, onViewFontSize,
     scroll: (deltaY, x, y) => handleScrollDelta(deltaY, 0, x, y, 'touch') });
 
   return {
@@ -485,6 +497,7 @@ const attachTerminalInteractions = ({
       document.removeEventListener('keyup', handleSelectionGestureEnd);
 
       if (overlay) {
+        overlay.removeEventListener('wheel', handleOverlayWheel);
         overlay.removeEventListener('contextmenu', blockContextMenu);
         overlay.removeEventListener('touchstart', handleTouchStart);
         overlay.removeEventListener('touchmove', handleTouchMove);

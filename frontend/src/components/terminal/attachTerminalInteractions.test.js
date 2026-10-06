@@ -238,6 +238,30 @@ describe('attachTerminalInteractions', () => {
   });
 
   describe('모바일 터치', () => {
+    it('routes wheel events on the overlay through read-only history without terminal input', () => {
+      const scrollReadOnly = vi.fn();
+      term.buffer.active.type = 'alternate';
+      mount({ isMobile: () => true, isReadOnly: () => true, scrollReadOnly });
+      const event = new WheelEvent('wheel', { deltaY: -120, clientX: 100, clientY: 200, cancelable: true });
+      overlay.dispatchEvent(event);
+      expect(scrollReadOnly).toHaveBeenCalledWith(-6);
+      expect(event.defaultPrevented).toBe(true);
+      expect(input.push).not.toHaveBeenCalled();
+      handle.detach();
+      scrollReadOnly.mockClear();
+      overlay.dispatchEvent(new WheelEvent('wheel', { deltaY: -120 }));
+      expect(scrollReadOnly).not.toHaveBeenCalled();
+    });
+    it('uses Ctrl+wheel for view zoom without seeking history', () => {
+      const onViewFontSize = vi.fn();
+      const scrollReadOnly = vi.fn();
+      term.options = { fontSize: 13 };
+      mount({ isReadOnly: () => true, scrollReadOnly, onViewFontSize });
+      overlay.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, ctrlKey: true }));
+      expect(onViewFontSize).toHaveBeenCalledWith(14);
+      expect(scrollReadOnly).not.toHaveBeenCalled();
+      expect(input.push).not.toHaveBeenCalled();
+    });
     it('세로 드래그는 스크롤한다 (감쇠 ×0.5)', () => {
       mount();
       overlay.dispatchEvent(touchEvent('touchstart', 100, 200));

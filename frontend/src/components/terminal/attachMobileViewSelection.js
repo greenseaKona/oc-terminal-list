@@ -5,10 +5,12 @@ import { getLinkAtClient, getFileLinkAtClient } from '../../utils/terminalLinkAt
 const HOLD_MS = 500;
 const MOVE_PX = 5;
 
+export const clampViewFontSize = (size) => Math.max(8, Math.min(28, Math.round(size)));
+
 // xterm paints text on a canvas, so removing the touch shield alone cannot give
 // phones a text selection. Keep the input shield and select actual buffer cells.
 export default function attachMobileViewSelection({ term, overlay, isReadOnly,
-  scroll, setContextMenu, onFileLinkClick }) {
+  scroll, setContextMenu, onFileLinkClick, onViewFontSize }) {
   if (!overlay) return { detach() {} };
   const { bufferCellFromClientPoint } = createTerminalGeometry(term);
   let gesture = null;
@@ -18,6 +20,15 @@ export default function attachMobileViewSelection({ term, overlay, isReadOnly,
   const stop = (event) => { event.preventDefault(); event.stopPropagation(); };
   const point = (event) => ({ x: event.clientX, y: event.clientY });
   const cellAt = (p) => bufferCellFromClientPoint(p.x, p.y);
+  const distance = (touches) => Math.hypot(touches[0].clientX - touches[1].clientX,
+    touches[0].clientY - touches[1].clientY);
+  const startPinch = (touches) => {
+    cancel();
+    const span = distance(touches);
+    if (!onViewFontSize || span <= 0) { return; }
+    term.clearSelection();
+    gesture = { kind: 'pinch', span, fontSize: term.options.fontSize };
+  };
   const select = (end) => {
     const args = selectionArgsFromCells(gesture.anchor, end, term.cols);
     if (args) term.select(args.column, args.row, args.length);
@@ -94,11 +105,18 @@ export default function attachMobileViewSelection({ term, overlay, isReadOnly,
     if (!isReadOnly()) return;
     lastTouchAt = Date.now();
     stop(event);
+    if (event.touches.length === 2) { startPinch(event.touches); return; }
     if (event.touches.length !== 1) { cancel(); return; }
     start(point(event.touches[0]), 'touch');
   };
   const touchMove = (event) => {
     if (!isReadOnly()) { cancel(); return; }
+    if (gesture?.kind === 'pinch') {
+      stop(event);
+      if (event.touches.length !== 2) { cancel(); return; }
+      onViewFontSize(clampViewFontSize(gesture.fontSize * distance(event.touches) / gesture.span));
+      return;
+    }
     if (event.touches.length !== 1) { cancel(); return; }
     move(point(event.touches[0]), event);
   };
@@ -106,6 +124,7 @@ export default function attachMobileViewSelection({ term, overlay, isReadOnly,
     if (!isReadOnly()) { cancel(); return; }
     stop(event);
     lastTouchAt = Date.now();
+    if (gesture?.kind === 'pinch' || event.touches.length > 0) { cancel(); return; }
     end();
   };
   const mouseDown = (event) => {

@@ -92,6 +92,32 @@ describe('Terminal', () => {
   });
 
   describe('연결', () => {
+    it('scrolls and pinches the mobile view overlay while keeping the connection and input lock', async () => {
+      const props = { sessionId: 'sess-1', isMobile: true, paneMultiplexer: 'none',
+        settings: { ...testSettings(), mobileViewOnly: true } };
+      const view = renderTerminal(props);
+      const ws = await openSocket();
+      const term = harness.term;
+      const overlay = view.getByTestId('terminal-touch-overlay');
+      act(() => {
+        term.buffer.active.baseY = 100;
+        term.buffer.active.viewportY = 100;
+        term.handlers.scroll();
+      });
+      fireEvent.wheel(overlay, { deltaY: -120 });
+      expect(term.scrollToLine).toHaveBeenCalled();
+      const base = term.options.fontSize;
+      fireEvent.touchStart(overlay, { touches: [{ clientX: 100, clientY: 100 }, { clientX: 200, clientY: 100 }] });
+      fireEvent.touchMove(overlay, { touches: [{ clientX: 50, clientY: 100 }, { clientX: 250, clientY: 100 }] });
+      await waitFor(() => expect(term.options.fontSize).toBe(Math.min(28, base * 2)));
+      fireEvent.touchEnd(overlay, { touches: [] });
+      expect(term.options.disableStdin).toBe(true);
+      expect(term.focus).not.toHaveBeenCalled();
+      expect(harness.sockets).toHaveLength(1);
+      expect(ws.sent.every((data) => typeof data !== 'string' || data.startsWith('{'))).toBe(true);
+      view.rerender(<TerminalComponent {...props} settings={{ ...props.settings, fontSize: 18 }} />);
+      expect(term.options.fontSize).toBe(18);
+    });
     it('mobile view mode blocks focus and all input while preserving the connection and output', async () => {
       const props = { sessionId: 'sess-1', isMobile: true, paneMultiplexer: 'none',
         settings: { ...testSettings(), mobileViewOnly: true } };
