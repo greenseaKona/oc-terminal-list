@@ -445,6 +445,7 @@ export const en = {
     screenDump: 'Terminal text',
     screenDumpHint: 'Free select & copy any portion. ESC to close.',
     viewAsText: 'View as text',
+    selectionToInput: 'Use in quick input',
     mobileViewMode: 'View',
     mobileInputMode: 'Input',
     mobileEnableInput: 'Switch to input mode',

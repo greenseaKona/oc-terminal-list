@@ -2302,6 +2302,15 @@ const TerminalComponent = forwardRef(({ sessionId, hostId, isMobile = false, tmu
             if (sel) copyTextToClipboard(sel);
             setContextMenu(null);
           }}
+          onUseSelection={() => {
+            const text = xtermRef.current?.getSelection();
+            setContextMenu(null);
+            if (text) {
+              window.dispatchEvent(new CustomEvent('iterm:selection-to-command-input', {
+                detail: { text, sessionId, paneId, tabId },
+              }));
+            }
+          }}
           onCopyLink={() => {
             if (contextMenu.linkUrl) copyTextToClipboard(contextMenu.linkUrl);
             setContextMenu(null);

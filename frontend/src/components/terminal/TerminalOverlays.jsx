@@ -174,7 +174,7 @@ export const AuthPromptOverlay = ({ prompt, themeUi, t, onSubmit, onCancel }) =>
   );
 };
 
-export const TerminalContextMenu = ({ x, y, hasSelection, linkUrl, themeUi, t, onCopy, onCopyLink, onCopyAll, onPaste, onRefresh, onScrollToBottom, onUploadFile, onScreenDump, onClose, readOnly = false }) => {
+export const TerminalContextMenu = ({ x, y, hasSelection, linkUrl, themeUi, t, onCopy, onUseSelection, onCopyLink, onCopyAll, onPaste, onRefresh, onScrollToBottom, onUploadFile, onScreenDump, onClose, readOnly = false }) => {
   const ref = useRef(null);
   const [pos, setPos] = useState({ x, y });
   const [measured, setMeasured] = useState(false);
@@ -204,6 +204,9 @@ export const TerminalContextMenu = ({ x, y, hasSelection, linkUrl, themeUi, t, o
   const items = [];
   if (hasSelection) {
     items.push({ icon: Copy, label: t('copy') || 'Copy', action: onCopy });
+    if (readOnly && onUseSelection) {
+      items.push({ icon: ClipboardPaste, label: t('selectionToInput') || 'Use in quick input', action: onUseSelection });
+    }
   }
   if (linkUrl && onCopyLink) {
     items.push({ icon: LinkIcon, label: t('copyLink') || 'Copy link', action: onCopyLink });

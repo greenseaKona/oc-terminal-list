@@ -3,6 +3,7 @@ import { Terminal as TerminalIcon, Menu, XCircle, LogOut, Columns3, MessageSquar
 import { DEFAULT_FONT_SIZE, DEFAULT_FONT_SIZE_MOBILE } from './utils/terminalFonts';
 import useSettings from './hooks/useSettings';
 import useMobileViewMode from './hooks/useMobileViewMode';
+import useSelectionToCommandInput from './hooks/useSelectionToCommandInput';
 import { flushSync } from 'react-dom';
 import useAppConfig from './hooks/useAppConfig';
 import useTranslation from './hooks/useTranslation';
@@ -812,7 +813,7 @@ function App() {
   const [inputModePending, setInputModePending] = useState(false);
   const inputModePendingRef = useRef(false);
   const enableMobileInput = useEvent(async (openComposer = false) => {
-    if (inputModePendingRef.current) return;
+    if (inputModePendingRef.current) { return false; }
     inputModePendingRef.current = true;
     setInputModePending(true);
     try {
@@ -821,8 +822,10 @@ function App() {
       if (results.some(result => !result)) throw new Error('Cannot leave terminal history');
       setMobileViewOnly(false);
       if (openComposer) setCommandInputOpen(true);
+      return true;
     } catch {
       setNotification({ isOpen: true, message: t('mobileInputModeError'), type: 'error' });
+      return false;
     } finally {
       inputModePendingRef.current = false;
       setInputModePending(false);
@@ -860,6 +863,12 @@ function App() {
   // LazyErrorBoundary 가 페이지를 리로드해도 입력이 날아가지 않게. (utils/quickInputDraft.js)
   const [commandText, setCommandText] = useState(loadDraft);
   useEffect(() => { saveDraft(commandText); }, [commandText]);
+  const selectionSourceAvailable = useEvent(({ tabId, paneId, sessionId }) => tabs.some(tab =>
+    tab.id === tabId && tab.panes?.some(pane => pane.id === paneId && (pane.sessionId || pane.id) === sessionId)));
+  useSelectionToCommandInput({ isMobile, mobileViewOnly, enableMobileInput,
+    isSourceAvailable: selectionSourceAvailable,
+    onActivateSource: ({ tabId, paneId }) => { setActiveTabId(tabId); focusPane(tabId, paneId); },
+    setCommandText, setCommandInputOpen });
   const [screenDumpText, setScreenDumpText] = useState(null);
   // 터미널 컨텍스트 메뉴 "텍스트로 보기" → ScreenDumpModal. prop 드릴링(App→PaneGrid→Pane→Terminal)
   // 대신 CustomEvent 로 터미널이 직접 화면 텍스트를 보내고 여기서 수신한다.

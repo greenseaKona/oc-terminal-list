@@ -370,6 +370,30 @@ describe('Terminal', () => {
       ).toBe(true));
     });
 
+    it('passes the exact view-mode selection and source to quick input without sending terminal input', async () => {
+      renderTerminal({ paneId: 'source-pane', tabId: 'source-tab', isMobile: true,
+        settings: { ...testSettings(), language: 'ko', mobileViewOnly: true } });
+      const ws = await openSocket();
+      const text = '  selected output\nsecond line  ';
+      harness.term.hasSelection.mockReturnValue(true);
+      harness.term.getSelection.mockReturnValue(text);
+      const listener = vi.fn();
+      window.addEventListener('iterm:selection-to-command-input', listener);
+      try {
+        fireEvent.mouseDown(harness.term.element, {
+          button: 2, clientX: 30, clientY: 40,
+        });
+        fireEvent.click(await screen.findByText('입력창에 넣기'));
+        expect(listener).toHaveBeenCalledOnce();
+        expect(listener.mock.calls[0][0].detail).toEqual({ text, sessionId: 'sess-1',
+          paneId: 'source-pane', tabId: 'source-tab' });
+        expect(ws.sent.some(data => typeof data === 'string' && !data.startsWith('{'))).toBe(false);
+        expect(screen.queryByText('입력창에 넣기')).toBeNull();
+      } finally {
+        window.removeEventListener('iterm:selection-to-command-input', listener);
+      }
+    });
+
     it('긴 원시 터미널 입력도 최근 명령에 저장하지 않는다', async () => {
       renderTerminal({ sessionId: 'private-input' });
       await openSocket();
