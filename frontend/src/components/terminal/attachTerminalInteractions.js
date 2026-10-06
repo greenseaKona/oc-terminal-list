@@ -135,6 +135,11 @@ const attachTerminalInteractions = ({
 
   // xterm.d.ts: true = xterm 기본 처리 허용, false = 우리가 처리했으니 중단.
   term.attachCustomWheelEventHandler((e) => {
+    const routeToPty = shouldRouteWheelToPty({
+      bufferType: term.buffer?.active?.type || 'normal',
+      mouseTrackingMode: term.modes?.mouseTrackingMode || 'none',
+    });
+    if (!routeToPty) return true;
     handleScrollDelta(e.deltaY, e.deltaMode, e.clientX, e.clientY, 'wheel');
     return false;
   });

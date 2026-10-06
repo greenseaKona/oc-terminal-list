@@ -116,11 +116,14 @@ describe('attachTerminalInteractions', () => {
   describe('휠 스크롤 라우팅', () => {
     const wheel = (deltaY, deltaMode = 0) => term.handlers.wheel({ deltaY, deltaMode, clientX: 55, clientY: 45 });
 
-    it('일반 버퍼에서는 xterm 스크롤백을 직접 굴린다', () => {
+    it('일반 버퍼에서는 픽셀 휠 이벤트를 xterm 기본 처리에 그대로 넘긴다', () => {
       mount();
-      wheel(60); // 60px / 20px = 3줄
+      const first = wheel(8);
+      const second = wheel(8);
 
-      expect(term.scrollLines).toHaveBeenCalledWith(3);
+      expect(first).toBe(true);
+      expect(second).toBe(true);
+      expect(term.scrollLines).not.toHaveBeenCalled();
       expect(input.push).not.toHaveBeenCalled();
     });
 
@@ -158,16 +161,6 @@ describe('attachTerminalInteractions', () => {
       expect(input.push.mock.calls[1][0]).toContain('[<65;');
     });
 
-    it('분수 줄은 누적했다가 한 줄이 될 때만 스크롤한다 (트랙패드 부드러운 스크롤)', () => {
-      mount();
-      wheel(8);  // 0.4줄
-      wheel(8);  // 누적 0.8줄
-      expect(term.scrollLines).not.toHaveBeenCalled();
-
-      wheel(8);  // 누적 1.2줄 → 1줄 발화, 0.2 남김
-      expect(term.scrollLines).toHaveBeenCalledWith(1);
-    });
-
     it('한 이벤트로 보내는 휠 리포트를 12개로 제한한다 (관성 스크롤이 tmux 를 익사시키지 않게)', () => {
       term.buffer.active.type = 'alternate';
       mount();
@@ -177,7 +170,8 @@ describe('attachTerminalInteractions', () => {
       expect(reports).toBe(12);
     });
 
-    it('스크롤하면 기존 선택을 지운다', () => {
+    it('PTY로 휠을 보낼 때 기존 선택을 지운다', () => {
+      term.buffer.active.type = 'alternate';
       term.hasSelection = vi.fn(() => true);
       mount();
       wheel(60);
@@ -194,7 +188,8 @@ describe('attachTerminalInteractions', () => {
       expect(input.push).not.toHaveBeenCalled();
     });
 
-    it('xterm 기본 처리를 항상 막는다 (우리가 처리했으므로)', () => {
+    it('PTY로 라우팅한 휠만 xterm 기본 처리를 막는다', () => {
+      term.buffer.active.type = 'alternate';
       mount();
       expect(wheel(60)).toBe(false);
     });
