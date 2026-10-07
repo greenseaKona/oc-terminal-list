@@ -281,14 +281,6 @@ const MobileToolbar = ({
       <div style={{ ...styles.toolbar, ...(onToggleViewOnly && {
         height: 'calc(44px + env(safe-area-inset-bottom, 0px))',
       }) }}>
-        {viewOnly && (
-          <div style={styles.pinned}>
-            <Key tone="accent" style={VIEW_CONTROL_STYLE} disabled={modePending} aria-busy={modePending}
-              title={t('mobileEscapeToInputHint')} aria-label={t('mobileEscapeToInputHint')}
-              onMouseDown={(e) => e.preventDefault()} onClick={() => onAction?.('escapeToInput')}>{t('mobileEscapeToInput')}</Key>
-            <Divider />
-          </div>
-        )}
         {onToggleViewOnly && (
           <div style={styles.pinned}>
             <Key active={viewOnly} aria-pressed={viewOnly} style={VIEW_CONTROL_STYLE}
@@ -298,6 +290,14 @@ const MobileToolbar = ({
               onMouseDown={(e) => e.preventDefault()} onClick={onToggleViewOnly}>
               {modePending ? '…' : t(viewOnly ? 'mobileViewMode' : 'mobileInputMode')}
             </Key>
+            <Divider />
+          </div>
+        )}
+        {viewOnly && (
+          <div style={styles.pinned}>
+            <Key tone="accent" style={VIEW_CONTROL_STYLE} disabled={modePending} aria-busy={modePending}
+              title={t('mobileEscapeToInputHint')} aria-label={t('mobileEscapeToInputHint')}
+              onMouseDown={(e) => e.preventDefault()} onClick={() => onAction?.('escapeToInput')}>{t('mobileEscapeToInput')}</Key>
             <Divider />
           </div>
         )}
