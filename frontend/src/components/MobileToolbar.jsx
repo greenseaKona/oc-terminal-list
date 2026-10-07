@@ -281,6 +281,14 @@ const MobileToolbar = ({
       <div style={{ ...styles.toolbar, ...(onToggleViewOnly && {
         height: 'calc(44px + env(safe-area-inset-bottom, 0px))',
       }) }}>
+        {viewOnly && (
+          <div style={styles.pinned}>
+            <Key tone="accent" style={VIEW_CONTROL_STYLE} disabled={modePending} aria-busy={modePending}
+              title={t('mobileEscapeToInputHint')} aria-label={t('mobileEscapeToInputHint')}
+              onMouseDown={(e) => e.preventDefault()} onClick={() => onAction?.('escapeToInput')}>{t('mobileEscapeToInput')}</Key>
+            <Divider />
+          </div>
+        )}
         {onToggleViewOnly && (
           <div style={styles.pinned}>
             <Key active={viewOnly} aria-pressed={viewOnly} style={VIEW_CONTROL_STYLE}
@@ -298,9 +306,6 @@ const MobileToolbar = ({
             <Key style={VIEW_CONTROL_STYLE} title={t('mobileCopySelection')} onClick={() => onAction?.('copy')}>{t('mobileCopySelection')}</Key>
             <Key style={VIEW_CONTROL_STYLE} title={t('copyAll')} aria-label={t('copyAll')} onClick={() => onAction?.('copyAll')}><Copy size={14} /></Key>
             <Key style={VIEW_CONTROL_STYLE} title={t('viewAsText')} aria-label={t('viewAsText')} onClick={() => onAction?.('viewAsText')}><FileText size={14} /></Key>
-            <Key style={VIEW_CONTROL_STYLE} disabled={modePending} aria-busy={modePending}
-              title={t('mobileEscapeToInputHint')} aria-label={t('mobileEscapeToInputHint')}
-              onMouseDown={(e) => e.preventDefault()} onClick={() => onAction?.('escapeToInput')}>{t('mobileEscapeToInput')}</Key>
           </div>
           <div style={{ flexShrink: 0, paddingRight: '4px' }}>
             <Key style={VIEW_CONTROL_STYLE} disabled={modePending} title={t('scrollToBottom')} aria-label={t('scrollToBottom')}
